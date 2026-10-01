@@ -184,7 +184,9 @@ def create_app() -> FastAPI:
     # API Routers
     # --------------------------------------------------------------------------
     from vaultrag.api.routers.documents import router as documents_router
+    from vaultrag.api.routers.query import router as query_router
 
     app.include_router(documents_router)
+    app.include_router(query_router)
 
     return app
