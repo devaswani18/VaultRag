@@ -15,3 +15,9 @@ variable "project" {
   type        = string
   default     = "vaultrag"
 }
+
+variable "allowed_origins" {
+  description = "Allowed CORS origins for the documents S3 bucket"
+  type        = list(string)
+  default     = ["http://localhost:5173"]
+}
