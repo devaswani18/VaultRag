@@ -119,8 +119,10 @@ class TestQueryAnswerPII:
         mock_query_repo.get.return_value = tenant_data
         mock_query_repo_cls.return_value = mock_query_repo
 
-        mock_retrieve.return_value = [_chunk()]
         aadhaar = _valid_aadhaar()
+        mock_retrieve.return_value = [
+            _chunk(text=f"The account belongs to citizen with Aadhaar {aadhaar}.")
+        ]
         # LLM returns answer containing an Aadhaar number
         mock_generate.return_value = AnswerResult(
             answer=f"The account belongs to citizen with Aadhaar {aadhaar}.",
@@ -176,7 +178,7 @@ class TestQueryAnswerPII:
         mock_query_repo.get.return_value = tenant_data
         mock_query_repo_cls.return_value = mock_query_repo
 
-        mock_retrieve.return_value = [_chunk()]
+        mock_retrieve.return_value = [_chunk(text="The leave policy allows 20 annual days.")]
         mock_generate.return_value = AnswerResult(
             answer="The leave policy allows 20 annual days.",
             citations=["cid-1"],

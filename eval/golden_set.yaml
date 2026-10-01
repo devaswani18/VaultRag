@@ -1,0 +1,97 @@
+# Starter golden evaluation dataset: 10 in-document questions and 10 out-of-document questions
+# Evaluates retrieval score distribution and calibrates the retrieval gate threshold (min_retrieval_score).
+
+corpus:
+  - eval/corpus/handbook.txt
+  - eval/corpus/security_policy.txt
+
+questions:
+  - id: in_01
+    question: "How many paid annual leave days do full-time employees receive?"
+    answerable: true
+    expected_doc: "eval/corpus/handbook.txt"
+
+  - id: in_02
+    question: "What are the standard working hours at Acme Corporation?"
+    answerable: true
+    expected_doc: "eval/corpus/handbook.txt"
+
+  - id: in_03
+    question: "How many days of remote work are permitted per week with manager approval?"
+    answerable: true
+    expected_doc: "eval/corpus/handbook.txt"
+
+  - id: in_04
+    question: "When does health insurance coverage begin for new employees?"
+    answerable: true
+    expected_doc: "eval/corpus/handbook.txt"
+
+  - id: in_05
+    question: "What is the deadline for submitting travel expense reimbursements via Concur?"
+    answerable: true
+    expected_doc: "eval/corpus/handbook.txt"
+
+  - id: in_06
+    question: "What is the maximum daily meal reimbursement for domestic travel?"
+    answerable: true
+    expected_doc: "eval/corpus/handbook.txt"
+
+  - id: in_07
+    question: "What is the minimum character length required for company passwords?"
+    answerable: true
+    expected_doc: "eval/corpus/security_policy.txt"
+
+  - id: in_08
+    question: "How frequently must corporate system passwords be changed?"
+    answerable: true
+    expected_doc: "eval/corpus/security_policy.txt"
+
+  - id: in_09
+    question: "After how many minutes of inactivity must screen lock activate?"
+    answerable: true
+    expected_doc: "eval/corpus/security_policy.txt"
+
+  - id: in_10
+    question: "What security classification is assigned to customer PII and financial records?"
+    answerable: true
+    expected_doc: "eval/corpus/security_policy.txt"
+
+  - id: out_01
+    question: "What is the capital city of Australia and what is its population?"
+    answerable: false
+
+  - id: out_02
+    question: "How do you bake a sourdough bread loaf from scratch using wild yeast?"
+    answerable: false
+
+  - id: out_03
+    question: "What was the closing stock price of Apple on January 15th 2021?"
+    answerable: false
+
+  - id: out_04
+    question: "What are the primary clinical symptoms and treatment options for feline diabetes?"
+    answerable: false
+
+  - id: out_05
+    question: "Which national team won the FIFA Men's World Cup football championship in 1998?"
+    answerable: false
+
+  - id: out_06
+    question: "How many planetary moons does the planet Jupiter have in orbit?"
+    answerable: false
+
+  - id: out_07
+    question: "What is the balanced chemical reaction equation for plant photosynthesis?"
+    answerable: false
+
+  - id: out_08
+    question: "How do you repair a leaky single-handle kitchen faucet cartridge?"
+    answerable: false
+
+  - id: out_09
+    question: "What are the official rules and pitch length of professional cricket bowling?"
+    answerable: false
+
+  - id: out_10
+    question: "What is the typical average lifespan of an African bush elephant in the wild?"
+    answerable: false

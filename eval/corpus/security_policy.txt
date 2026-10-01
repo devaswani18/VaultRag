@@ -1,0 +1,10 @@
+Acme Information Security Policy
+
+1. Password and Authentication Requirements
+All employees must use multi-factor authentication (MFA) on all company systems. Passwords must be at least 14 characters long and changed every 90 days.
+
+2. Device Security and Encryption
+All corporate laptops and mobile devices accessing enterprise data must have full-disk BitLocker or FileVault encryption enabled. Screen lock must activate automatically after 5 minutes of inactivity.
+
+3. Data Classification
+Company data is classified into Public, Internal, Confidential, and Restricted. Customer PII and financial records are classified as Restricted and require encrypted transit and storage.
