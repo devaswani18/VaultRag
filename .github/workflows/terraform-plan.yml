@@ -1,0 +1,95 @@
+name: Terraform Plan
+
+on:
+  pull_request:
+    paths:
+      - 'infra/**'
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  plan:
+    name: Terraform Plan (dev)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/envs/dev
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Configure AWS Credentials (OIDC Plan Role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_PLAN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-terraform-plan
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive ../..
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=dev/terraform.tfstate" \
+            -backend-config="region=${{ vars.AWS_REGION }}" \
+            -backend-config="use_lockfile=true"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan -no-color -out=tfplan | tee plan_output.txt
+        continue-on-error: true
+
+      - name: Post Plan to PR Comment
+        uses: actions/github-script@v7
+        if: steps.plan.outcome != 'skipped'
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const path = 'infra/envs/dev/plan_output.txt';
+            let planText = 'No plan output captured.';
+            if (fs.existsSync(path)) {
+              planText = fs.readFileSync(path, 'utf8');
+            }
+            const maxChars = 60000;
+            if (planText.length > maxChars) {
+              planText = planText.substring(0, maxChars) + '\n\n...[Plan output truncated to 60,000 characters]';
+            }
+            const status = '${{ steps.plan.outcome }}' === 'success' ? 'SUCCESS' : 'FAILURE';
+            const body = `### Terraform Plan Status: ${status}
+
+            <details>
+            <summary>Show Plan Output</summary>
+
+            \`\`\`hcl
+            ${planText}
+            \`\`\`
+
+            </details>
+
+            *Action triggered by @${{ github.actor }} on PR #${{ github.event.pull_request.number }}*`;
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Enforce Plan Exit Code
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
