@@ -34,7 +34,7 @@ jobs:
           role-session-name: gha-terraform-plan
 
       - name: Terraform Format Check
-        run: terraform fmt -check -recursive ../../infra
+        run: terraform fmt -check -recursive ../..
 
       - name: Terraform Init
         run: |
