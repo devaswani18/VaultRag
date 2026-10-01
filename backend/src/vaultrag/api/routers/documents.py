@@ -6,14 +6,17 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from qdrant_client import models
 
 from vaultrag.auth.dependencies import get_ctx
-from vaultrag.clients.dynamo import DocumentRepo
+from vaultrag.clients import qdrant as qdrant_client
+from vaultrag.clients.dynamo import DocumentRepo, TenantRepo
 from vaultrag.clients.s3 import build_object_key, create_presigned_post
 from vaultrag.config import get_settings
 from vaultrag.context import RequestContext, Role
-from vaultrag.errors import ValidationFailed
+from vaultrag.errors import Forbidden, NotFound, ValidationFailed
+from vaultrag.security.acl import can_view
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -33,6 +36,16 @@ class CreateDocumentRequest(BaseModel):
     content_type: str = Field(..., description="MIME type of the file")
     size_bytes: int = Field(..., description="File size in bytes")
     visibility: str = Field("tenant", description="Document visibility: tenant | roles | private")
+    allowed_roles: list[str] | None = Field(
+        None, description="Permitted roles if visibility is roles"
+    )
+    allowed_users: list[str] | None = Field(None, description="Permitted user sub IDs")
+
+
+class PatchDocumentAclRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    visibility: str = Field(..., description="Document visibility: tenant | roles | private")
     allowed_roles: list[str] | None = Field(
         None, description="Permitted roles if visibility is roles"
     )
@@ -103,9 +116,8 @@ async def create_document(
     if visibility == "roles" and not allowed_roles:
         raise ValidationFailed("Visibility 'roles' requires non-empty allowed_roles")
 
+    # Private documents default allowed_users to empty list (ownership checked via owner_user_id)
     allowed_users: list[str] = req.allowed_users or []
-    if visibility == "private" and not allowed_users:
-        allowed_users = [ctx.user_id]
 
     # 6. Generate time-sortable doc_id and deterministic S3 key
     doc_id = _generate_time_sortable_doc_id()
@@ -149,7 +161,7 @@ async def create_document(
 async def list_documents(
     ctx: RequestContext = Depends(get_ctx),  # noqa: B008
 ) -> list[dict[str, Any]]:
-    """List documents for the current tenant."""
+    """List documents for current tenant, filtered by can_view ACL rules."""
     repo = DocumentRepo()
     items, _ = repo.list_for_tenant(ctx.tenant_id, limit=100)
 
@@ -164,6 +176,7 @@ async def list_documents(
             "chunk_count": d.get("chunk_count", 0),
         }
         for d in items
+        if can_view(ctx, d)
     ]
 
 
@@ -172,9 +185,13 @@ async def get_document(
     doc_id: str,
     ctx: RequestContext = Depends(get_ctx),  # noqa: B008
 ) -> dict[str, Any]:
-    """Retrieve document details by doc_id (strictly scoped to the caller's tenant)."""
+    """Retrieve document details by doc_id (returns 404 if inaccessible to prevent IDOR leaks)."""
     repo = DocumentRepo()
     doc = repo.get(ctx.tenant_id, doc_id)
+
+    if not can_view(ctx, doc):
+        # Return 404 (not 403) to avoid revealing document existence
+        raise NotFound(f"Document '{doc_id}' not found")
 
     return {
         "id": doc["doc_id"],
@@ -188,4 +205,89 @@ async def get_document(
         "allowed_roles": doc.get("allowed_roles", []),
         "allowed_users": doc.get("allowed_users", []),
         "owner_user_id": doc.get("owner_user_id", ""),
+    }
+
+
+@router.patch("/{doc_id}/acl")
+async def update_document_acl(
+    doc_id: str,
+    req: PatchDocumentAclRequest,
+    ctx: RequestContext = Depends(get_ctx),  # noqa: B008
+) -> dict[str, Any]:
+    """Update document ACL (allowed for document owner or tenant admin)."""
+    repo = DocumentRepo()
+    tenant_repo = TenantRepo()
+
+    doc = repo.get(ctx.tenant_id, doc_id)
+
+    # Hidden documents return 404 (not 403) to prevent revealing existence
+    if not can_view(ctx, doc):
+        raise NotFound(f"Document '{doc_id}' not found")
+
+    # 1. Authorize: Only document owner or tenant admin can update ACL
+    if not (ctx.is_admin or doc.get("owner_user_id") == ctx.user_id):
+        raise Forbidden("Only document owner or tenant admin can update ACL")
+
+    # 2. Validate visibility
+    visibility = req.visibility.strip().lower()
+    if visibility not in ("tenant", "roles", "private"):
+        raise ValidationFailed("Invalid visibility. Must be one of: 'tenant', 'roles', 'private'")
+
+    # 3. Validate roles
+    allowed_roles: list[str] = []
+    if req.allowed_roles is not None:
+        valid_roles = {r.value for r in Role}
+        for r in req.allowed_roles:
+            r_clean = r.strip().lower()
+            if r_clean not in valid_roles:
+                raise ValidationFailed(
+                    f"Invalid role '{r}' in allowed_roles. Allowed: {sorted(valid_roles)}"
+                )
+            allowed_roles.append(r_clean)
+
+    if visibility == "roles" and not allowed_roles:
+        raise ValidationFailed("Visibility 'roles' requires non-empty allowed_roles")
+
+    allowed_users: list[str] = req.allowed_users or []
+
+    # 4. Atomically update DynamoDB document record (conditional on tenant and doc_id)
+    updated_doc = repo.update_acl(
+        tenant_id=ctx.tenant_id,
+        doc_id=doc_id,
+        visibility=visibility,
+        allowed_roles=allowed_roles,
+        allowed_users=allowed_users,
+    )
+
+    # 5. Update every chunk's payload in Qdrant with filter on tenant_id AND doc_id
+    qdrant_filter = models.Filter(
+        must=[
+            models.FieldCondition(
+                key="tenant_id",
+                match=models.MatchValue(value=ctx.tenant_id),
+            ),
+            models.FieldCondition(
+                key="doc_id",
+                match=models.MatchValue(value=doc_id),
+            ),
+        ]
+    )
+    qdrant_client.set_payload_by_filter(
+        filter=qdrant_filter,
+        payload={
+            "visibility": visibility,
+            "allowed_roles": allowed_roles,
+            "allowed_users": allowed_users,
+        },
+    )
+
+    # 6. Bump tenant "kb_version" (integer attribute, atomic ADD)
+    tenant_repo.bump_kb_version(ctx.tenant_id)
+
+    return {
+        "id": doc_id,
+        "doc_id": doc_id,
+        "visibility": updated_doc.get("visibility", visibility),
+        "allowed_roles": updated_doc.get("allowed_roles", allowed_roles),
+        "allowed_users": updated_doc.get("allowed_users", allowed_users),
     }
