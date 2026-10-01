@@ -132,7 +132,17 @@ def _is_retryable_error(exc: Exception) -> bool:
     msg = str(exc).lower()
     return any(
         err_hint in msg
-        for err_hint in ("429", "resource_exhausted", "quota", "500", "502", "503", "504")
+        for err_hint in (
+            "429",
+            "resource_exhausted",
+            "quota",
+            "500",
+            "502",
+            "503",
+            "504",
+            "timeout",
+            "timed out",
+        )
     )
 
 
@@ -244,7 +254,7 @@ def generate_json(
         temperature=0.2,
         response_mime_type="application/json",
         max_output_tokens=1024,
-        http_options=types.HttpOptions(timeout=30.0),
+        http_options=types.HttpOptions(timeout=30000),
     )
 
     start_time = time.monotonic()

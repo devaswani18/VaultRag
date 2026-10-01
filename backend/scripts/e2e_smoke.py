@@ -3,16 +3,10 @@
 
 Usage::
 
-    python backend/scripts/e2e_smoke.py
+    cd backend && python scripts/e2e_smoke.py
 
-Reads credentials from ``.demo-credentials.json`` in the repo root.
-Format::
-
-    {
-        "acme_admin": {"username": "admin@acme.example.com", "password": "..."},
-        "globex_admin": {"username": "admin@globex.example.com", "password": "..."},
-        "api_url": "https://xxxxxx.lambda-url.ap-south-1.on.aws/"
-    }
+Expected: acme gets a real answer with a source; globex gets "could not find".
+If globex sees acme's content, stop and report immediately; that is a tenant-isolation bug.
 
 Tokens and passwords are NEVER printed.
 """
@@ -39,13 +33,63 @@ LEAVE_POLICY_TEXT = (
     "Leave requests must be submitted at least 3 days in advance via HR portal."
 )
 QUESTION = "How many paid leave days do full-time employees get?"
+DEFAULT_API_URL = "https://w3jfxjxg34gptvv5gqqxrpevpm0zaxup.lambda-url.ap-south-1.on.aws/"
 
 
 def _load_creds() -> dict:
-    if not CREDS_FILE.exists():
-        sys.exit(f"ERROR: {CREDS_FILE} not found. Please create it with your demo credentials.")
-    with CREDS_FILE.open() as f:
-        return json.load(f)
+    candidates = [
+        CREDS_FILE,
+        Path(".demo-credentials.json"),
+        Path("../.demo-credentials.json"),
+    ]
+    for c in candidates:
+        if c.exists():
+            with c.open(encoding="utf-8") as f:
+                return json.load(f)
+    sys.exit("ERROR: .demo-credentials.json not found.")
+
+
+def _get_token(creds: dict, tenant_id: str, api_url: str) -> str:
+    """Authenticate and return an id_token via Cognito. Passwords and tokens are never printed."""
+    # 1. Search in users list
+    user = None
+    for u in creds.get("users", []):
+        roles = u.get("roles") or []
+        role = u.get("role") or ""
+        if u.get("tenant_id") == tenant_id and (role == "admin" or "admin" in roles):
+            user = u
+            break
+
+    if user and "password" in user:
+        import boto3
+
+        client_id = creds.get("client_id") or "7tphqalmdashifb1ee25oqca1n"
+        region = creds.get("region") or "ap-south-1"
+        cognito = boto3.client("cognito-idp", region_name=region)
+        auth_res = cognito.initiate_auth(
+            ClientId=client_id,
+            AuthFlow="USER_PASSWORD_AUTH",
+            AuthParameters={"USERNAME": user["email"], "PASSWORD": user["password"]},
+        )
+        token = auth_res["AuthenticationResult"]["IdToken"]
+        print(f"[auth] Authenticated as {tenant_id} admin (token omitted)")
+        return token
+
+    # 2. Fallback to direct dict key (e.g. creds["acme_admin"])
+    user_key = f"{tenant_id}_admin"
+    if user_key in creds:
+        login_url = api_url.rstrip("/") + "/auth/login"
+        resp = _http_json(
+            login_url,
+            method="POST",
+            body={"username": creds[user_key].get("username")},
+        )
+        token = resp.get("id_token") or resp.get("access_token", "")
+        if token:
+            print(f"[auth] Authenticated as {user_key} (token omitted)")
+            return token
+
+    sys.exit(f"ERROR: Could not obtain token for tenant '{tenant_id}'. Check credentials.")
 
 
 def _http_json(
@@ -58,25 +102,6 @@ def _http_json(
     req = urllib.request.Request(url, data=data, headers=req_headers, method=method)
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode())
-
-
-def _get_token(creds: dict, user_key: str, api_url: str) -> str:
-    """Authenticate and return an id_token. Passwords are never printed."""
-    user_creds = creds[user_key]
-    login_url = api_url.rstrip("/") + "/auth/login"
-    # POST credentials; token value is NOT printed anywhere
-    resp = _http_json(
-        login_url,
-        method="POST",
-        body={"username": user_creds["username"]},
-    )
-    # If the API uses a direct Cognito token endpoint, adapt here.
-    # For the smoke test we assume the token is in resp["id_token"].
-    token = resp.get("id_token") or resp.get("access_token", "")
-    if not token:
-        sys.exit(f"ERROR: Could not obtain token for {user_key}. Check credentials.")
-    print(f"[auth] Authenticated as {user_key} (token omitted)")
-    return token
 
 
 def _api(
@@ -105,16 +130,14 @@ def _poll_ready(api_url: str, token: str, doc_id: str, max_wait: int = 120) -> N
 
 def main() -> None:
     creds = _load_creds()
-    api_url = creds.get("api_url", "")
-    if not api_url:
-        sys.exit("ERROR: 'api_url' missing from .demo-credentials.json")
+    api_url = creds.get("api_url") or DEFAULT_API_URL
 
     # ── Step 1: Authenticate as acme admin ───────────────────────────────────
-    acme_token = _get_token(creds, "acme_admin", api_url)
+    acme_token = _get_token(creds, "acme", api_url)
 
     # ── Step 2: Create document record ───────────────────────────────────────
     filename = "leave_policy.txt"
-    content = LEAVE_POLICY_TEXT.encode()
+    content = LEAVE_POLICY_TEXT.encode("utf-8")
     print(f"\n[upload] Creating document record for '{filename}' …")
     create_resp = _api(
         api_url,
@@ -134,10 +157,7 @@ def main() -> None:
     print(f"[upload] doc_id={doc_id}")
 
     # ── Step 3: POST file to presigned S3 URL ────────────────────────────────
-    import urllib.parse
-
     print("[upload] Uploading file to presigned S3 URL …")
-    # Build multipart form-data manually (no external deps)
     boundary = "----VaultRAGSmokeBoundary"
     body_parts: list[bytes] = []
     for key, val in upload_fields.items():
@@ -174,14 +194,18 @@ def main() -> None:
         body={"question": QUESTION, "top_k": 5},
         token=acme_token,
     )
-    print(f"[query] Answer: {acme_query['answer']}")
-    print(f"[query] Sources ({len(acme_query['sources'])}):")
-    for src in acme_query["sources"]:
+    print(f"[query] Answer: {acme_query.get('answer')}")
+    sources = acme_query.get("sources", [])
+    print(f"[query] Sources ({len(sources)}):")
+    for src in sources:
         print(f"         chunk_id={src['chunk_id']} score={src['score']:.4f} page={src['page']}")
+
+    if not sources:
+        print("WARNING: acme received no sources for its own document!", file=sys.stderr)
 
     # ── Step 6: Query as globex — expect no results ───────────────────────────
     print("\n[isolation] Authenticating as globex admin …")
-    globex_token = _get_token(creds, "globex_admin", api_url)
+    globex_token = _get_token(creds, "globex", api_url)
 
     print(f"[isolation] Asking as globex: {QUESTION!r}")
     globex_query = _api(
@@ -191,16 +215,21 @@ def main() -> None:
         body={"question": QUESTION, "top_k": 5},
         token=globex_token,
     )
-    print(f"[isolation] Answer: {globex_query['answer']}")
-    if globex_query["sources"]:
+    print(f"[isolation] Answer: {globex_query.get('answer')}")
+    globex_sources = globex_query.get("sources", [])
+
+    if globex_sources:
         print(
-            "WARNING: globex received sources — check tenant isolation!",
+            "FATAL TENANT-ISOLATION BUG: globex received sources from acme's documents!",
             file=sys.stderr,
         )
+        for s in globex_sources:
+            print(f"   leaked: {s}", file=sys.stderr)
+        sys.exit(1)
     else:
-        print("[isolation] ✓ globex received no sources — tenant isolation confirmed.")
+        print("[isolation] [PASS] globex received no sources - tenant isolation confirmed.")
 
-    print("\n✓ E2E smoke test complete.")
+    print("\n[PASS] E2E smoke test complete successfully.")
 
 
 if __name__ == "__main__":
