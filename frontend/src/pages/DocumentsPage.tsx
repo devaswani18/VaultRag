@@ -413,7 +413,7 @@ export const DocumentsPage: React.FC = () => {
                     </div>
                   </td>
                   <td>{renderStatusBadge(doc.status)}</td>
-                  <td>{(doc.size_bytes / 1024).toFixed(1)} KB</td>
+                  <td>{(((doc.size_bytes ?? (doc as any).size) || 0) / 1024).toFixed(1)} KB</td>
                   <td>{doc.chunk_count !== undefined ? doc.chunk_count : '—'}</td>
                   <td style={{ color: 'var(--text-muted)' }}>
                     {new Date(doc.created_at).toLocaleString()}

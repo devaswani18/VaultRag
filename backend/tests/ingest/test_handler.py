@@ -239,7 +239,7 @@ def test_handler_successful_ingestion_payload_verification(
     # 2. Check document updated to READY with chunk_count
     ready_call = mock_repo.update_status.call_args_list[1]
     assert ready_call[0] == ("acme", "doc-ok", DocumentStatus.READY)
-    assert ready_call[1].get("extra_fields") == {"chunk_count": 1}
+    assert ready_call[1].get("extra_fields", {}).get("chunk_count") == 1
 
 
 # ------------------------------------------------------------------------------

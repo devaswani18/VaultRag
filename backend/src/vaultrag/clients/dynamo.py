@@ -21,6 +21,8 @@ DEFAULT_TENANT_SETTINGS: dict[str, Any] = {
     "min_faithfulness": 0.6,
     "daily_query_quota": 200,
     "cache_enabled": True,
+    "retain_original_files": True,
+    "settings_version": 1,
 }
 
 
@@ -127,6 +129,40 @@ class TenantRepo:
         db_item = _floats_to_decimals(item)
         self.table.put_item(Item=db_item)
         return item
+
+    def update_settings(self, tenant_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+        """Atomically update tenant settings with a conditional update and bump settings_version."""
+        item = self.get(tenant_id)
+        current_settings = item.get("settings", {})
+        new_settings = {**DEFAULT_TENANT_SETTINGS, **current_settings, **patch}
+        current_version = int(new_settings.get("settings_version", 1))
+        new_settings["settings_version"] = current_version + 1
+
+        now = datetime.now(UTC).isoformat()
+        db_settings = _floats_to_decimals(new_settings)
+
+        try:
+            response = self.table.update_item(
+                Key={"tenant_id": tenant_id},
+                UpdateExpression="SET #settings = :new_settings, #updated_at = :now",
+                ConditionExpression="attribute_exists(tenant_id)",
+                ExpressionAttributeNames={
+                    "#settings": "settings",
+                    "#updated_at": "updated_at",
+                },
+                ExpressionAttributeValues={
+                    ":new_settings": db_settings,
+                    ":now": now,
+                },
+                ReturnValues="ALL_NEW",
+            )
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                raise NotFound(f"Tenant '{tenant_id}' not found") from e
+            raise ValidationFailed(f"DynamoDB update error: {e}") from e
+
+        updated_item = _decimals_to_floats(response["Attributes"])
+        return updated_item.get("settings", new_settings)
 
 
 class DocumentRepo:

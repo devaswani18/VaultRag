@@ -13,9 +13,12 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from vaultrag.auth.dependencies import get_ctx
+from vaultrag.clients.dynamo import TenantRepo
 from vaultrag.context import RequestContext
+from vaultrag.errors import ValidationFailed
 from vaultrag.rag.generate import answer as generate_answer
 from vaultrag.rag.retrieve import retrieve
+from vaultrag.security.pii_guard import apply_policy
 
 logger = logging.getLogger(__name__)
 
@@ -48,55 +51,58 @@ async def query(
 
     If no relevant chunks are found the LLM is **not** called; a canned
     "no information" response is returned instead.
-
-    Response shape::
-
-        {
-            "answer": "<string>",
-            "sources": [
-                {
-                    "doc_id": "<string>",
-                    "filename": "<string>",
-                    "chunk_id": "<string>",
-                    "page": <int|null>,
-                    "score": <float>,
-                    "snippet": "<string <= 200 chars>"
-                }
-            ],
-            "request_id": "<string>"
-        }
-
     Full chunk text is NEVER returned to the client.
     """
-    # 1. Retrieve relevant chunks through the ACL filter
-    chunks = retrieve(ctx, req.question, top_k=req.top_k)
+    # 0. Load tenant settings to inspect PII policy
+    tenant_repo = TenantRepo()
+    try:
+        tenant_rec = tenant_repo.get(ctx.tenant_id)
+        pii_mode = str(tenant_rec.get("settings", {}).get("pii_mode", "redact")).strip().lower()
+    except Exception:
+        pii_mode = "redact"
 
-    # 2. Short-circuit when nothing was found
+    # 1. Run guard on question BEFORE embedding or sending to LLM
+    q_res = apply_policy(req.question, mode=pii_mode)
+    if q_res.blocked:
+        raise ValidationFailed("Your question appears to contain sensitive identifiers")
+
+    clean_question = q_res.text if pii_mode == "redact" else req.question
+
+    # 2. Retrieve relevant chunks through the ACL filter using safe question
+    chunks = retrieve(ctx, clean_question, top_k=req.top_k)
+
+    # 3. Short-circuit when nothing was found
     if not chunks:
         logger.info(
             "query returned no chunks tenant=%s question_len=%d",
             ctx.tenant_id,
-            len(req.question),
+            len(clean_question),
         )
         return {
             "answer": _NO_RESULTS_ANSWER,
             "sources": [],
             "request_id": ctx.request_id,
+            "pii_in_answer": False,
         }
 
-    # 3. Generate the answer
-    result = generate_answer(req.question, chunks)
+    # 4. Generate the answer using safe question
+    result = generate_answer(clean_question, chunks)
 
-    # 4. Build cited chunk_id set for fast lookup
+    # 5. Guard answer: redact in redact mode; track pii_in_answer for audit
+    ans_res = apply_policy(result.answer, mode=pii_mode)
+    final_answer = ans_res.text if pii_mode == "redact" else result.answer
+    pii_in_answer = bool(ans_res.findings_summary) if pii_mode != "off" else False
+
+    # 6. Build cited chunk_id set for fast lookup
     cited_ids: set[str] = set(result.citations)
 
-    # 5. Assemble sources — never expose full text, only snippets <= 200 chars
+    # 7. Assemble sources — never expose full text, only snippets <= 200 chars
     chunk_map = {c.chunk_id: c for c in chunks}
     sources: list[dict[str, Any]] = []
     for chunk_id in result.citations:
         chunk = chunk_map.get(chunk_id)
         if chunk is None:
-            continue  # citation was already validated in generate layer; shouldn't happen
+            continue  # citation was already validated in generate layer
         sources.append(
             {
                 "doc_id": chunk.doc_id,
@@ -124,10 +130,11 @@ async def query(
             )
             seen_ids.add(chunk.chunk_id)
 
-    _ = cited_ids  # referenced above; kept to satisfy linter
+    _ = cited_ids
 
     return {
-        "answer": result.answer,
+        "answer": final_answer,
         "sources": sources,
         "request_id": ctx.request_id,
+        "pii_in_answer": pii_in_answer,
     }

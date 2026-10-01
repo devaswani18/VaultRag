@@ -59,23 +59,12 @@ class Hook(Protocol):
 
 
 def get_default_hooks() -> list[Hook]:
-    """Return the ordered list of registered ingestion hooks.
+    """Return the ordered list of registered ingestion hooks."""
+    from vaultrag.ingest.hooks.pii_hook import PIIHook
 
-    ----------------------------------------------------------------------------
-    NOTE ON HOOK REGISTRATION:
-    Currently, NO security guard hooks are registered in Stage 8.
-    In upcoming stages:
-      - Stage 9: PII Guard hook (detects / redacts sensitive entities like Aadhaar,
-        credit cards, PAN, and phone numbers based on tenant pii_mode).
-      - Stage 10: Prompt Injection Guard hook (inspects chunk text for prompt
-        manipulation or jailbreaks and raises DocumentBlocked if injection is high).
-    ----------------------------------------------------------------------------
-    """
-    hooks: list[Hook] = [
-        # Stage 9: pii_guard_hook will be registered here
-        # Stage 10: injection_guard_hook will be registered here
+    return [
+        PIIHook(),
     ]
-    return hooks
 
 
 def run_hooks(

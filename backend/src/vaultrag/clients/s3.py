@@ -176,3 +176,15 @@ def delete_prefix(
         deleted_count += len(delete_keys)
 
     return deleted_count
+
+
+def delete_object(
+    key: str,
+    bucket: str | None = None,
+    s3_client: Any = None,
+) -> None:
+    """Delete a single S3 object by key."""
+    settings = get_settings()
+    target_bucket = bucket or settings.docs_bucket
+    client = get_s3_client(s3_client)
+    client.delete_object(Bucket=target_bucket, Key=key)

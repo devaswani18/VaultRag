@@ -10,12 +10,12 @@ from qdrant_client import models
 from vaultrag.clients.dynamo import DocumentRepo, DocumentStatus, TenantRepo
 from vaultrag.clients.gemini import embed_texts
 from vaultrag.clients.qdrant import upsert_chunks
-from vaultrag.clients.s3 import download_bytes, parse_object_key
+from vaultrag.clients.s3 import delete_object, download_bytes, parse_object_key
 from vaultrag.config import get_settings
 from vaultrag.errors import NotFound, ValidationFailed
 from vaultrag.ingest.chunker import chunk_document
 from vaultrag.ingest.parsers import parse_document
-from vaultrag.ingest.pipeline import DocumentBlocked, get_default_hooks, run_hooks
+from vaultrag.ingest.pipeline import ChunkContext, DocumentBlocked, get_default_hooks, run_hooks
 
 logger = logging.getLogger(__name__)
 
@@ -128,14 +128,18 @@ def process_record(record: dict[str, Any]) -> None:
         except Exception:
             tenant_settings = {}
 
-        # ----------------------------------------------------------------------
-        # NOTE ON HOOK REGISTRATION:
-        # In Stage 8, get_default_hooks() returns an empty list.
-        # Stage 9: PII guard hook will be registered to detect/redact PII.
-        # Stage 10: Prompt injection guard hook will be registered to scan chunks.
-        # ----------------------------------------------------------------------
         hooks = get_default_hooks()
-        contexts = run_hooks(chunks, hooks, tenant_settings)
+        chunk_contexts = [
+            ChunkContext(
+                chunk=c,
+                text=c.text,
+                tenant_id=tenant_id,
+                doc_id=doc_id,
+                filename=doc.get("filename", ""),
+            )
+            for c in chunks
+        ]
+        contexts = run_hooks(chunk_contexts, hooks, tenant_settings)
         active_contexts = [ctx for ctx in contexts if not ctx.is_dropped and ctx.text.strip()]
 
         if not active_contexts:
@@ -178,12 +182,17 @@ def process_record(record: dict[str, Any]) -> None:
 
         upsert_chunks(points)
 
-        # 10. Update document to READY with chunk_count
+        # 10. Aggregate PII summary and update document to READY
+        doc_pii_summary: dict[str, int] = {}
+        for ctx in contexts:
+            for ptype, pcount in ctx.payload.get("pii_summary", {}).items():
+                doc_pii_summary[ptype] = doc_pii_summary.get(ptype, 0) + pcount
+
         repo.update_status(
             tenant_id,
             doc_id,
             DocumentStatus.READY,
-            extra_fields={"chunk_count": len(points)},
+            extra_fields={"chunk_count": len(points), "pii_summary": doc_pii_summary},
         )
         logger.info(
             "Document ingestion completed: tenant_id=%s, doc_id=%s, chunk_count=%d",
@@ -191,6 +200,14 @@ def process_record(record: dict[str, Any]) -> None:
             doc_id,
             len(points),
         )
+
+        # 11. Handle retain_original_files policy
+        if not tenant_settings.get("retain_original_files", True):
+            try:
+                delete_object(key)
+                logger.info("Deleted original S3 object per retain_original_files=False: %s", key)
+            except Exception:
+                logger.exception("Failed to delete original S3 object: %s", key)
 
     except DocumentBlocked as e:
         # Quarantine blocked document
