@@ -62,10 +62,21 @@ export interface QuerySource {
   snippet: string
 }
 
+export interface QueryTrust {
+  score: number
+  grounded: boolean
+  abstained: boolean
+  partial: boolean
+  reasons: string[]
+}
+
 export interface QueryResponse {
   answer: string
+  trust?: QueryTrust
   sources: QuerySource[]
   request_id?: string
+  pii_in_answer?: boolean
+  injection_attempt?: boolean
 }
 
 export class ApiError extends Error {
