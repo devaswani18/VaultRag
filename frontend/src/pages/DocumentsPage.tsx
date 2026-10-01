@@ -1,0 +1,429 @@
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  DocumentRecord,
+  DocumentVisibility,
+  createDocument,
+  listDocuments,
+  uploadToPresigned,
+} from '../api/client'
+import { Upload, FileText, CheckCircle2, Clock, AlertTriangle, XCircle, ShieldAlert } from 'lucide-react'
+
+const ALLOWED_EXTENSIONS = ['pdf', 'docx', 'txt', 'md']
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024 // 10 MB limit
+const AVAILABLE_ROLES = ['admin', 'manager', 'employee', 'intern']
+const FINAL_STATUSES = new Set(['READY', 'FAILED', 'QUARANTINED'])
+
+const CONTENT_TYPE_MAP: Record<string, string> = {
+  pdf: 'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  txt: 'text/plain',
+  md: 'text/markdown',
+}
+
+export const DocumentsPage: React.FC = () => {
+  const [documents, setDocuments] = useState<DocumentRecord[]>([])
+  const [isLoadingDocs, setIsLoadingDocs] = useState<boolean>(true)
+  const [fetchError, setFetchError] = useState<string | null>(null)
+
+  // Upload Form State
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [visibility, setVisibility] = useState<DocumentVisibility>('tenant')
+  const [selectedRoles, setSelectedRoles] = useState<string[]>([])
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null)
+  const [isUploading, setIsUploading] = useState<boolean>(false)
+
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const isMountedRef = useRef<boolean>(true)
+
+  // Load documents
+  const loadDocuments = useCallback(async () => {
+    try {
+      const docs = await listDocuments()
+      if (isMountedRef.current) {
+        setDocuments(docs)
+        setFetchError(null)
+      }
+      return docs
+    } catch (err: any) {
+      if (isMountedRef.current) {
+        setFetchError(err?.message || 'Failed to load documents')
+      }
+      return []
+    } finally {
+      if (isMountedRef.current) {
+        setIsLoadingDocs(false)
+      }
+    }
+  }, [])
+
+  // Initial load
+  useEffect(() => {
+    isMountedRef.current = true
+    loadDocuments()
+    return () => {
+      isMountedRef.current = false
+    }
+  }, [loadDocuments])
+
+  // Polling every 3s for non-final statuses; stops on unmount or when all final
+  useEffect(() => {
+    const hasNonFinal = documents.some((d) => !FINAL_STATUSES.has(d.status))
+    if (!hasNonFinal) {
+      return
+    }
+
+    const intervalId = setInterval(async () => {
+      if (!isMountedRef.current) return
+      try {
+        const updated = await listDocuments()
+        if (isMountedRef.current) {
+          setDocuments(updated)
+        }
+      } catch {
+        // Silently tolerate transient polling errors
+      }
+    }, 3000)
+
+    // Stop polling on unmount or when dependencies change
+    return () => {
+      clearInterval(intervalId)
+    }
+  }, [documents])
+
+  const validateFile = (file: File): string | null => {
+    const parts = file.name.split('.')
+    if (parts.length < 2) {
+      return 'File must have a valid extension (.pdf, .docx, .txt, or .md)'
+    }
+    const ext = parts[parts.length - 1].toLowerCase()
+    if (!ALLOWED_EXTENSIONS.includes(ext)) {
+      return `Invalid file type '.${ext}'. Allowed types: ${ALLOWED_EXTENSIONS.map((e) => `.${e}`).join(', ')}`
+    }
+    if (file.size <= 0) {
+      return 'File is empty'
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      return `File exceeds maximum allowed size of 10 MB (selected: ${(file.size / (1024 * 1024)).toFixed(1)} MB)`
+    }
+    return null
+  }
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setUploadError(null)
+    const file = e.target.files?.[0]
+    if (!file) {
+      setSelectedFile(null)
+      return
+    }
+
+    const error = validateFile(file)
+    if (error) {
+      setUploadError(error)
+      setSelectedFile(null)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+      return
+    }
+
+    setSelectedFile(file)
+  }
+
+  const handleRoleToggle = (role: string) => {
+    setSelectedRoles((prev) =>
+      prev.includes(role) ? prev.filter((r) => r !== role) : [...prev, role]
+    )
+  }
+
+  const handleUploadSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setUploadError(null)
+
+    if (!selectedFile) {
+      setUploadError('Please choose a file to upload')
+      return
+    }
+
+    const validationError = validateFile(selectedFile)
+    if (validationError) {
+      setUploadError(validationError)
+      return
+    }
+
+    if (visibility === 'roles' && selectedRoles.length === 0) {
+      setUploadError('Please select at least one role when visibility is set to "roles"')
+      return
+    }
+
+    const parts = selectedFile.name.split('.')
+    const ext = parts[parts.length - 1].toLowerCase()
+    const contentType = CONTENT_TYPE_MAP[ext] || 'application/octet-stream'
+
+    setIsUploading(true)
+    setUploadProgress(0)
+
+    try {
+      // 1. Create document record via API to obtain S3 presigned post
+      const createResp = await createDocument({
+        filename: selectedFile.name,
+        content_type: contentType,
+        size_bytes: selectedFile.size,
+        visibility,
+        allowed_roles: visibility === 'roles' ? selectedRoles : undefined,
+      })
+
+      // 2. Upload file directly to S3 via presigned post
+      await uploadToPresigned(createResp.upload, selectedFile, (percent) => {
+        if (isMountedRef.current) {
+          setUploadProgress(percent)
+        }
+      })
+
+      // 3. Reset form and reload documents table
+      if (isMountedRef.current) {
+        setSelectedFile(null)
+        setUploadProgress(null)
+        setSelectedRoles([])
+        if (fileInputRef.current) fileInputRef.current.value = ''
+      }
+      await loadDocuments()
+    } catch (err: any) {
+      if (isMountedRef.current) {
+        setUploadError(err?.message || 'Failed to complete upload')
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsUploading(false)
+      }
+    }
+  }
+
+  const renderStatusBadge = (status: string) => {
+    switch (status) {
+      case 'PENDING_UPLOAD':
+        return (
+          <span className="status-badge PENDING_UPLOAD" data-testid="status-pending">
+            <Clock size={12} />
+            PENDING_UPLOAD
+          </span>
+        )
+      case 'PROCESSING':
+        return (
+          <span className="status-badge PROCESSING" data-testid="status-processing">
+            <span className="spinner spinner-dark" style={{ width: 10, height: 10, borderWidth: 1 }} />
+            PROCESSING
+          </span>
+        )
+      case 'READY':
+        return (
+          <span className="status-badge READY" data-testid="status-ready">
+            <CheckCircle2 size={12} />
+            READY
+          </span>
+        )
+      case 'QUARANTINED':
+        return (
+          <span className="status-badge QUARANTINED" data-testid="status-quarantined">
+            <ShieldAlert size={12} />
+            QUARANTINED
+          </span>
+        )
+      case 'FAILED':
+        return (
+          <span className="status-badge FAILED" data-testid="status-failed">
+            <XCircle size={12} />
+            FAILED
+          </span>
+        )
+      default:
+        return <span className="status-badge">{status}</span>
+    }
+  }
+
+  return (
+    <div className="documents-page">
+      <div className="page-title-row">
+        <h1>Tenant Documents</h1>
+        <button
+          onClick={loadDocuments}
+          disabled={isLoadingDocs}
+          className="btn-logout"
+          data-testid="btn-refresh-docs"
+        >
+          {isLoadingDocs ? 'Refreshing...' : 'Refresh List'}
+        </button>
+      </div>
+
+      {fetchError && (
+        <div className="error-banner" data-testid="fetch-error-banner">
+          {fetchError}
+        </div>
+      )}
+
+      {/* Upload Form Card */}
+      <section className="upload-card">
+        <h2>Upload Document</h2>
+
+        {uploadError && (
+          <div className="error-banner" data-testid="upload-error-banner" role="alert">
+            <AlertTriangle size={16} style={{ display: 'inline', marginRight: 6 }} />
+            {uploadError}
+          </div>
+        )}
+
+        <form onSubmit={handleUploadSubmit} noValidate>
+          <div className="upload-form-grid">
+            {/* File Dropzone / Picker */}
+            <div
+              className="file-dropzone"
+              onClick={() => fileInputRef.current?.click()}
+              data-testid="file-dropzone"
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,.docx,.txt,.md"
+                onChange={handleFileChange}
+                disabled={isUploading}
+                data-testid="file-input"
+              />
+              <div className="dropzone-label">
+                <Upload size={24} color="var(--accent-primary-hover)" />
+                <span>
+                  {selectedFile ? 'Change selected file' : 'Click or drop document to upload'}
+                </span>
+                <span className="dropzone-hint">
+                  PDF, DOCX, TXT, or MD (max 10 MB)
+                </span>
+              </div>
+              {selectedFile && (
+                <div className="selected-file-badge" data-testid="selected-file-name">
+                  <FileText size={14} />
+                  <span>{selectedFile.name}</span>
+                  <span style={{ color: 'var(--text-muted)' }}>
+                    ({(selectedFile.size / 1024).toFixed(1)} KB)
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Visibility & Role Access Configuration */}
+            <div className="visibility-options">
+              <div className="form-group">
+                <label htmlFor="select-visibility">Access Visibility</label>
+                <select
+                  id="select-visibility"
+                  className="form-input"
+                  value={visibility}
+                  onChange={(e) => setVisibility(e.target.value as DocumentVisibility)}
+                  disabled={isUploading}
+                  data-testid="select-visibility"
+                >
+                  <option value="tenant">Tenant-Wide (all members)</option>
+                  <option value="roles">Role-Restricted</option>
+                  <option value="private">Private (owner only)</option>
+                </select>
+              </div>
+
+              {visibility === 'roles' && (
+                <div className="form-group" data-testid="roles-selector-group">
+                  <label>Allowed Roles (select at least one)</label>
+                  <div className="roles-checkbox-grid">
+                    {AVAILABLE_ROLES.map((role) => (
+                      <label key={role} className="checkbox-chip">
+                        <input
+                          type="checkbox"
+                          checked={selectedRoles.includes(role)}
+                          onChange={() => handleRoleToggle(role)}
+                          disabled={isUploading}
+                          data-testid={`checkbox-role-${role}`}
+                        />
+                        <span>{role}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Progress bar */}
+          {uploadProgress !== null && (
+            <div className="progress-container" data-testid="upload-progress-container">
+              <div className="progress-bar-bg">
+                <div
+                  className="progress-bar-fill"
+                  style={{ width: `${uploadProgress}%` }}
+                  data-testid="upload-progress-bar"
+                />
+              </div>
+              <div className="progress-text">{uploadProgress}% uploaded</div>
+            </div>
+          )}
+
+          <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              type="submit"
+              className="btn-primary"
+              style={{ width: 'auto', minWidth: 160 }}
+              disabled={isUploading || !selectedFile}
+              data-testid="btn-upload-submit"
+            >
+              {isUploading ? (
+                <>
+                  <span className="spinner" />
+                  <span>Uploading...</span>
+                </>
+              ) : (
+                <>
+                  <Upload size={16} />
+                  <span>Start Upload</span>
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      {/* Documents Table */}
+      <section className="table-card">
+        <table className="documents-table" data-testid="documents-table">
+          <thead>
+            <tr>
+              <th>Filename</th>
+              <th>Status</th>
+              <th>Size</th>
+              <th>Chunks</th>
+              <th>Created At</th>
+            </tr>
+          </thead>
+          <tbody>
+            {documents.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="empty-state" data-testid="empty-docs-message">
+                  {isLoadingDocs ? 'Loading documents...' : 'No documents ingested yet.'}
+                </td>
+              </tr>
+            ) : (
+              documents.map((doc) => (
+                <tr key={doc.id} data-testid={`doc-row-${doc.id}`}>
+                  <td>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <FileText size={16} color="var(--text-secondary)" />
+                      <span style={{ fontWeight: 500 }}>{doc.filename}</span>
+                    </div>
+                  </td>
+                  <td>{renderStatusBadge(doc.status)}</td>
+                  <td>{(doc.size_bytes / 1024).toFixed(1)} KB</td>
+                  <td>{doc.chunk_count !== undefined ? doc.chunk_count : '—'}</td>
+                  <td style={{ color: 'var(--text-muted)' }}>
+                    {new Date(doc.created_at).toLocaleString()}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </section>
+    </div>
+  )
+}
