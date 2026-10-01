@@ -23,8 +23,8 @@ class Settings(BaseSettings):
     gaps_table: str = "vaultrag-dev-gaps"
     docs_bucket: str = "vaultrag-docs-dev"
     qdrant_collection: str = "vaultrag_chunks"
-    embedding_model: str = "text-embedding-004"
-    generation_model: str = "gemini-2.5-flash"
+    embedding_model: str = "gemini-embedding-001"
+    generation_model: str = "gemini-3.5-flash-lite"
     embedding_dim: int = 768
     max_upload_mb: int = 10
     top_k: int = 6
