@@ -35,7 +35,10 @@ resource "aws_iam_role" "gha_plan" {
         Condition = {
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:pull_request"
+            "token.actions.githubusercontent.com:sub" = [
+              "repo:${var.github_repo}:pull_request",
+              "repo:devaswani18@182419818/VaultRag@1398306952:pull_request"
+            ]
           }
         }
       }
@@ -102,11 +105,11 @@ resource "aws_iam_role" "gha_apply" {
         Condition = {
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          }
-          "ForAnyValue:StringEquals" = {
             "token.actions.githubusercontent.com:sub" = [
               "repo:${var.github_repo}:ref:refs/heads/main",
-              "repo:${var.github_repo}:environment:dev"
+              "repo:${var.github_repo}:environment:dev",
+              "repo:devaswani18@182419818/VaultRag@1398306952:ref:refs/heads/main",
+              "repo:devaswani18@182419818/VaultRag@1398306952:environment:dev"
             ]
           }
         }
