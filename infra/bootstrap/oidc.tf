@@ -173,6 +173,16 @@ resource "aws_iam_policy" "gha_apply_policy" {
           "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${var.project}-*"
         ]
       },
+      # Statement 4b: CloudWatch Logs describe actions (do not support resource-level scoping in AWS IAM)
+      {
+        Sid    = "LogsDescribeGlobal"
+        Effect = "Allow"
+        Action = [
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams"
+        ]
+        Resource = "*"
+      },
       # Statement 5: SSM Parameter Store read/write scoped strictly to project hierarchy
       {
         Sid    = "SSMScopedManagement"
