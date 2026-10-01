@@ -1,7 +1,8 @@
 """Query router: POST /query — RAG question-answering endpoint.
 
-Auth required on all routes.  Full chunk text is NEVER returned; only snippets
+Auth required on all routes. Full chunk text is NEVER returned; only snippets
 of at most 200 characters per source are included in the response.
+Includes prompt injection detection on query and output verification.
 """
 
 from __future__ import annotations
@@ -17,7 +18,9 @@ from vaultrag.clients.dynamo import TenantRepo
 from vaultrag.context import RequestContext
 from vaultrag.errors import ValidationFailed
 from vaultrag.rag.generate import answer as generate_answer
+from vaultrag.rag.output_guard import check_output
 from vaultrag.rag.retrieve import retrieve
+from vaultrag.security.injection_guard import scan_text
 from vaultrag.security.pii_guard import apply_policy
 
 logger = logging.getLogger(__name__)
@@ -47,31 +50,38 @@ async def query(
     req: QueryRequest,
     ctx: RequestContext = Depends(get_ctx),  # noqa: B008
 ) -> dict[str, Any]:
-    """Answer a question using the tenant's ingested documents.
-
-    If no relevant chunks are found the LLM is **not** called; a canned
-    "no information" response is returned instead.
-    Full chunk text is NEVER returned to the client.
-    """
-    # 0. Load tenant settings to inspect PII policy
+    """Answer a question using the tenant's ingested documents with Trust Layer guards."""
+    # 0. Load tenant settings
     tenant_repo = TenantRepo()
     try:
         tenant_rec = tenant_repo.get(ctx.tenant_id)
-        pii_mode = str(tenant_rec.get("settings", {}).get("pii_mode", "redact")).strip().lower()
+        settings = tenant_rec.get("settings", {})
+        pii_mode = str(settings.get("pii_mode", "redact")).strip().lower()
     except Exception:
         pii_mode = "redact"
 
-    # 1. Run guard on question BEFORE embedding or sending to LLM
+    # 1. Prompt injection detection on question (do NOT refuse; record injection_attempt)
+    inj_result = scan_text(req.question)
+    injection_attempt = inj_result.risk == "high"
+    if injection_attempt:
+        logger.warning(
+            "High injection risk detected on question: tenant_id=%s, user_id=%s, reasons=%s",
+            ctx.tenant_id,
+            ctx.user_id,
+            inj_result.reasons,
+        )
+
+    # 2. Run PII guard on question BEFORE embedding or sending to LLM
     q_res = apply_policy(req.question, mode=pii_mode)
     if q_res.blocked:
         raise ValidationFailed("Your question appears to contain sensitive identifiers")
 
     clean_question = q_res.text if pii_mode == "redact" else req.question
 
-    # 2. Retrieve relevant chunks through the ACL filter using safe question
+    # 3. Retrieve relevant chunks through the ACL filter using safe question
     chunks = retrieve(ctx, clean_question, top_k=req.top_k)
 
-    # 3. Short-circuit when nothing was found
+    # 4. Short-circuit when nothing was found
     if not chunks:
         logger.info(
             "query returned no chunks tenant=%s question_len=%d",
@@ -83,26 +93,28 @@ async def query(
             "sources": [],
             "request_id": ctx.request_id,
             "pii_in_answer": False,
+            "injection_attempt": injection_attempt,
         }
 
-    # 4. Generate the answer using safe question
+    # 5. Generate the answer using sandboxed prompt and canary
     result = generate_answer(clean_question, chunks)
 
-    # 5. Guard answer: redact in redact mode; track pii_in_answer for audit
-    ans_res = apply_policy(result.answer, mode=pii_mode)
-    final_answer = ans_res.text if pii_mode == "redact" else result.answer
+    # 6. Output guard verification (canary leak, untrusted URLs, system prompt leak)
+    out_check = check_output(answer=result.answer, chunks=chunks, canary=result.canary)
+    guarded_answer = out_check.safe_answer
+
+    # 7. Guard answer with PII policy
+    ans_res = apply_policy(guarded_answer, mode=pii_mode)
+    final_answer = ans_res.text if pii_mode == "redact" else guarded_answer
     pii_in_answer = bool(ans_res.findings_summary) if pii_mode != "off" else False
 
-    # 6. Build cited chunk_id set for fast lookup
-    cited_ids: set[str] = set(result.citations)
-
-    # 7. Assemble sources — never expose full text, only snippets <= 200 chars
+    # 8. Assemble sources — never expose full text, only snippets <= 200 chars
     chunk_map = {c.chunk_id: c for c in chunks}
     sources: list[dict[str, Any]] = []
     for chunk_id in result.citations:
         chunk = chunk_map.get(chunk_id)
         if chunk is None:
-            continue  # citation was already validated in generate layer
+            continue
         sources.append(
             {
                 "doc_id": chunk.doc_id,
@@ -130,11 +142,10 @@ async def query(
             )
             seen_ids.add(chunk.chunk_id)
 
-    _ = cited_ids
-
     return {
         "answer": final_answer,
         "sources": sources,
         "request_id": ctx.request_id,
         "pii_in_answer": pii_in_answer,
+        "injection_attempt": injection_attempt,
     }

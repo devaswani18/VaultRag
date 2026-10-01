@@ -60,10 +60,12 @@ class Hook(Protocol):
 
 def get_default_hooks() -> list[Hook]:
     """Return the ordered list of registered ingestion hooks."""
+    from vaultrag.ingest.hooks.injection_hook import InjectionHook
     from vaultrag.ingest.hooks.pii_hook import PIIHook
 
     return [
         PIIHook(),
+        InjectionHook(),
     ]
 
 

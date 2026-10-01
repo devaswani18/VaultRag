@@ -184,11 +184,13 @@ def create_app() -> FastAPI:
     # API Routers
     # --------------------------------------------------------------------------
     from vaultrag.admin.policies import router as policies_router
+    from vaultrag.admin.quarantine import router as quarantine_router
     from vaultrag.api.routers.documents import router as documents_router
     from vaultrag.api.routers.query import router as query_router
 
     app.include_router(documents_router)
     app.include_router(query_router)
     app.include_router(policies_router)
+    app.include_router(quarantine_router)
 
     return app

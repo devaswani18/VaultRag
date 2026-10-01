@@ -142,14 +142,65 @@ def process_record(record: dict[str, Any]) -> None:
         contexts = run_hooks(chunk_contexts, hooks, tenant_settings)
         active_contexts = [ctx for ctx in contexts if not ctx.is_dropped and ctx.text.strip()]
 
-        if not active_contexts:
-            raise ValidationFailed("All document chunks were dropped during processing")
+        # 8. Aggregate security summaries and reports (NO raw text)
+        doc_pii_summary: dict[str, int] = {}
+        injection_summary: dict[str, int] = {"low": 0, "medium": 0, "high": 0}
+        quarantine_report: list[dict[str, Any]] = []
 
-        # 8. Embed all remaining chunks (RETRIEVAL_DOCUMENT) in batches
+        for ctx in contexts:
+            # PII summary
+            for ptype, pcount in ctx.payload.get("pii_summary", {}).items():
+                doc_pii_summary[ptype] = doc_pii_summary.get(ptype, 0) + pcount
+
+            # Injection summary & quarantine report
+            irisk = ctx.payload.get("injection_risk", "low")
+            injection_summary[irisk] = injection_summary.get(irisk, 0) + 1
+            if irisk in ("medium", "high") or ctx.is_dropped:
+                quarantine_report.append(
+                    {
+                        "chunk_index": ctx.chunk.index if ctx.chunk else 0,
+                        "page": ctx.chunk.page if ctx.chunk else None,
+                        "risk": irisk,
+                        "reasons": ctx.payload.get("injection_reasons", []),
+                    }
+                )
+
+        total_chunks = len(contexts)
+        dropped_chunks = len([c for c in contexts if c.is_dropped])
+        drop_ratio = (dropped_chunks / total_chunks) if total_chunks > 0 else 0.0
+
+        # If > 30% of chunks are dropped or all chunks dropped, quarantine whole document
+        if drop_ratio > 0.30 or not active_contexts:
+            logger.warning(
+                "Document quarantined: tenant=%s, doc=%s, dropped=%d/%d (%.1f%%)",
+                tenant_id,
+                doc_id,
+                dropped_chunks,
+                total_chunks,
+                drop_ratio * 100,
+            )
+            err_msg = (
+                f"Quarantined: {dropped_chunks}/{total_chunks} chunks dropped by security policy"
+            )
+            repo.update_status(
+                tenant_id,
+                doc_id,
+                DocumentStatus.QUARANTINED,
+                error=err_msg,
+                extra_fields={
+                    "chunk_count": 0,
+                    "pii_summary": doc_pii_summary,
+                    "injection_summary": injection_summary,
+                    "quarantine_report": quarantine_report,
+                },
+            )
+            return
+
+        # 9. Embed all remaining active chunks (RETRIEVAL_DOCUMENT) in batches
         texts_to_embed = [ctx.text for ctx in active_contexts]
         embeddings = embed_texts(texts_to_embed, task_type="RETRIEVAL_DOCUMENT")
 
-        # 9. Upsert to Qdrant with complete schema payload
+        # 10. Upsert to Qdrant with complete schema payload
         now_iso = datetime.now(UTC).isoformat()
         points: list[models.PointStruct] = []
         for ctx, emb in zip(active_contexts, embeddings, strict=True):
@@ -182,17 +233,17 @@ def process_record(record: dict[str, Any]) -> None:
 
         upsert_chunks(points)
 
-        # 10. Aggregate PII summary and update document to READY
-        doc_pii_summary: dict[str, int] = {}
-        for ctx in contexts:
-            for ptype, pcount in ctx.payload.get("pii_summary", {}).items():
-                doc_pii_summary[ptype] = doc_pii_summary.get(ptype, 0) + pcount
-
+        # 11. Update document to READY with security summaries
         repo.update_status(
             tenant_id,
             doc_id,
             DocumentStatus.READY,
-            extra_fields={"chunk_count": len(points), "pii_summary": doc_pii_summary},
+            extra_fields={
+                "chunk_count": len(points),
+                "pii_summary": doc_pii_summary,
+                "injection_summary": injection_summary,
+                "quarantine_report": quarantine_report,
+            },
         )
         logger.info(
             "Document ingestion completed: tenant_id=%s, doc_id=%s, chunk_count=%d",
@@ -201,7 +252,7 @@ def process_record(record: dict[str, Any]) -> None:
             len(points),
         )
 
-        # 11. Handle retain_original_files policy
+        # 12. Handle retain_original_files policy
         if not tenant_settings.get("retain_original_files", True):
             try:
                 delete_object(key)
@@ -217,8 +268,21 @@ def process_record(record: dict[str, Any]) -> None:
             doc_id,
         )
         safe_msg = _safe_error_message(e)
+        inj_sum = injection_summary if "injection_summary" in locals() else {}
+        quar_rep = quarantine_report if "quarantine_report" in locals() else []
         try:
-            repo.update_status(tenant_id, doc_id, DocumentStatus.QUARANTINED, error=safe_msg)
+            repo.update_status(
+                tenant_id,
+                doc_id,
+                DocumentStatus.QUARANTINED,
+                error=safe_msg,
+                extra_fields={
+                    "chunk_count": 0,
+                    "pii_summary": doc_pii_summary if "doc_pii_summary" in locals() else {},
+                    "injection_summary": inj_sum,
+                    "quarantine_report": quar_rep,
+                },
+            )
         except Exception:
             logger.exception(
                 "Failed to update document to QUARANTINED for tenant_id=%s, doc_id=%s",

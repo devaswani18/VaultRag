@@ -28,6 +28,7 @@ class RetrievedChunk:
     page: int | None
     text: str
     score: float
+    injection_risk: str = "low"
 
 
 def retrieve(
@@ -86,6 +87,7 @@ def retrieve(
                 page=payload.get("page"),
                 text=str(payload.get("text", "")),
                 score=float(point.score),
+                injection_risk=str(payload.get("injection_risk", "low")),
             )
         )
 
