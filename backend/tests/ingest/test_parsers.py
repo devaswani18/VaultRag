@@ -12,7 +12,7 @@ from tests.fixtures.make_fixtures import (
     get_zipbomb_docx,
 )
 from vaultrag.errors import ValidationFailed
-from vaultrag.ingest.handler import parse_document
+from vaultrag.ingest.parsers import parse_document
 
 
 def test_parse_valid_pdf() -> None:
