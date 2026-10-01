@@ -29,6 +29,7 @@ coverage/
 htmlcov/
 backend/build/
 backend/dist/
+backend/tests/fixtures/data/
 
 # IDE / Editor
 .idea/

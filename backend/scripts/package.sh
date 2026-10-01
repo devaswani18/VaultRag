@@ -10,8 +10,26 @@ BUILD_DIR="build"
 DIST_DIR="dist"
 ZIP_FILE="${DIST_DIR}/lambda.zip"
 
+# Determine Python executable
+if [ -f "${BACKEND_DIR}/.venv/Scripts/python.exe" ]; then
+    PYTHON_CMD="${BACKEND_DIR}/.venv/Scripts/python.exe"
+elif [ -f "${BACKEND_DIR}/.venv/bin/python" ]; then
+    PYTHON_CMD="${BACKEND_DIR}/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1 && python3 -m pip --version >/dev/null 2>&1; then
+    PYTHON_CMD="python3"
+elif command -v python >/dev/null 2>&1 && python -m pip --version >/dev/null 2>&1; then
+    PYTHON_CMD="python"
+elif [ -f "/c/Users/aswan/AppData/Local/Programs/Python/Python313/python.exe" ]; then
+    PYTHON_CMD="/c/Users/aswan/AppData/Local/Programs/Python/Python313/python.exe"
+else
+    echo "ERROR: Python executable not found" >&2
+    exit 1
+fi
+
+
 echo "============================================================"
 echo " Packaging VaultRAG Lambda (ARM64 / Python 3.12)"
+echo " Using: ${PYTHON_CMD}"
 echo "============================================================"
 
 # 1. Clean build/ and dist/
@@ -23,9 +41,9 @@ mkdir -p "${BUILD_DIR}" "${DIST_DIR}"
 echo "[2/5] Installing ARM64 binary wheels for Python 3.12..."
 
 # Check if running under Windows / MSYS host where pip inspects local OS for markers
-if [[ "${OSTYPE:-}" == "msys"* || "${OSTYPE:-}" == "win32"* || "${OSTYPE:-}" == "cygwin"* ]] || python -c "import os, sys; sys.exit(0 if os.name == 'nt' else 1)" 2>/dev/null; then
+if [[ "${OSTYPE:-}" == "msys"* || "${OSTYPE:-}" == "win32"* || "${OSTYPE:-}" == "cygwin"* ]] || "$PYTHON_CMD" -c "import os, sys; sys.exit(0 if os.name == 'nt' else 1)" 2>/dev/null; then
     echo "  --> Detected Windows host; evaluating dependency markers for Linux ARM64 target..."
-    python -c "
+    "$PYTHON_CMD" -c "
 import sys
 try:
     import pip._vendor.packaging.markers as m
@@ -54,7 +72,7 @@ ret = main([
 sys.exit(ret)
 "
 else
-    pip install -r requirements.txt \
+    "$PYTHON_CMD" -m pip install -r requirements.txt \
         --target "${BUILD_DIR}" \
         --platform manylinux2014_aarch64 \
         --implementation cp \
@@ -78,7 +96,7 @@ find "${BUILD_DIR}" -type d -name "*.dist-info" -exec rm -rf {}/RECORD {}/direct
 
 # 4. Create lambda.zip distribution
 echo "[4/5] Archiving package to ${ZIP_FILE}..."
-python -c "
+"$PYTHON_CMD" -c "
 import os, zipfile
 zip_path = 'dist/lambda.zip'
 with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
@@ -93,7 +111,7 @@ with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED, compressle
 echo "[5/5] Calculating package metrics..."
 
 # Unzipped and zipped size calculation via python
-python -c "
+"$PYTHON_CMD" -c "
 import os, sys, hashlib
 
 build_dir = 'build'
@@ -131,6 +149,7 @@ if zipped_mb > 50:
 else:
     print('[OK] Package size is well within AWS Lambda limits.')
 "
+
 
 echo "============================================================"
 echo " Packaging completed successfully: ${ZIP_FILE}"

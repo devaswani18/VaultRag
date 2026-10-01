@@ -180,4 +180,11 @@ def create_app() -> FastAPI:
             "request_id": ctx.request_id,
         }
 
+    # --------------------------------------------------------------------------
+    # API Routers
+    # --------------------------------------------------------------------------
+    from vaultrag.api.routers.documents import router as documents_router
+
+    app.include_router(documents_router)
+
     return app

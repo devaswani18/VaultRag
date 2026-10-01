@@ -33,6 +33,10 @@ class DocStatus(StrEnum):
     DELETED = "DELETED"
 
 
+# Alias for readability and specification consistency
+DocumentStatus = DocStatus
+
+
 # Allowed status transitions
 VALID_STATUS_TRANSITIONS: dict[DocStatus, set[DocStatus]] = {
     DocStatus.PENDING_UPLOAD: {DocStatus.PROCESSING, DocStatus.FAILED, DocStatus.DELETED},
@@ -223,6 +227,7 @@ class DocumentRepo:
         doc_id: str,
         new_status: DocStatus | str,
         error: str | None = None,
+        extra_fields: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Enforce atomic valid status transition via ConditionExpression.
 
@@ -268,6 +273,15 @@ class DocumentRepo:
             update_expr += ", #err = :err"
             expr_names["#err"] = "error"
             expr_vals[":err"] = error
+        if extra_fields:
+            for idx, (k, v) in enumerate(extra_fields.items()):
+                if k in ("tenant_id", "doc_id", "status", "error", "updated_at"):
+                    continue
+                attr_name = f"#ef{idx}"
+                attr_val = f":ef{idx}"
+                update_expr += f", {attr_name} = {attr_val}"
+                expr_names[attr_name] = k
+                expr_vals[attr_val] = v
 
         try:
             response = self.table.update_item(
