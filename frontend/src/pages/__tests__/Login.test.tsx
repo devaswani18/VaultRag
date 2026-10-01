@@ -18,6 +18,8 @@ describe('LoginPage Form Validation', () => {
       idToken: null,
       isLoading: false,
       login: mockLogin,
+      signUp: vi.fn(),
+      confirmSignUp: vi.fn(),
       logout: vi.fn(),
       getIdToken: () => null,
       ...contextOverrides,

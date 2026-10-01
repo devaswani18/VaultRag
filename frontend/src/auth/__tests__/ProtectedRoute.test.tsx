@@ -18,6 +18,8 @@ describe('ProtectedRoute', () => {
       idToken: null,
       isLoading: false,
       login: vi.fn(),
+      signUp: vi.fn(),
+      confirmSignUp: vi.fn(),
       logout: vi.fn(),
       getIdToken: () => null,
     }
@@ -56,6 +58,8 @@ describe('ProtectedRoute', () => {
       idToken: 'valid-in-memory-token',
       isLoading: false,
       login: vi.fn(),
+      signUp: vi.fn(),
+      confirmSignUp: vi.fn(),
       logout: vi.fn(),
       getIdToken: () => 'valid-in-memory-token',
     }

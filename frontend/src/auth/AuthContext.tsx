@@ -9,6 +9,8 @@ import {
   authenticateUser,
   refreshIdToken,
   userFromIdToken,
+  signUpUser,
+  confirmSignUpUser,
 } from './cognito'
 import { AuthContext } from './context'
 import { User } from './types'
@@ -189,6 +191,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [scheduleAutoRefresh]
   )
 
+  const signUp = useCallback(
+    async (email: string, password: string, tenantId: string) => {
+      return signUpUser(email, password, tenantId)
+    },
+    []
+  )
+
+  const confirmSignUp = useCallback(
+    async (email: string, code: string) => {
+      return confirmSignUpUser(email, code)
+    },
+    []
+  )
+
   const getIdToken = useCallback(() => idTokenRef.current, [])
 
   return (
@@ -198,6 +214,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         idToken,
         isLoading,
         login,
+        signUp,
+        confirmSignUp,
         logout,
         getIdToken,
       }}

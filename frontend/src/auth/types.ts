@@ -11,6 +11,8 @@ export interface AuthContextType {
   idToken: string | null
   isLoading: boolean
   login: (username: string, password: string) => Promise<void>
+  signUp: (email: string, password: string, tenantId: string) => Promise<{ userConfirmed: boolean }>
+  confirmSignUp: (email: string, code: string) => Promise<void>
   logout: () => void
   getIdToken: () => string | null
 }

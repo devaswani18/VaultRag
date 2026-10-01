@@ -23,9 +23,9 @@ resource "aws_cognito_user_pool" "users" {
     require_symbols   = true
   }
 
-  # Multi-tenant self sign-up disabled: only admins can provision users
+  # Self sign-up enabled for user self-registration
   admin_create_user_config {
-    allow_admin_create_user_only = true
+    allow_admin_create_user_only = false
   }
 
   # Custom immutable attribute for tenant isolation
@@ -82,6 +82,7 @@ resource "aws_cognito_user_pool_client" "client" {
 
   write_attributes = [
     "email",
+    "custom:tenant_id",
   ]
 
   # Token validity: ID = 60m, Access = 60m, Refresh = 7d

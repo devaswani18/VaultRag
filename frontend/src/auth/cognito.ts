@@ -1,6 +1,8 @@
 import {
   CognitoIdentityProviderClient,
   InitiateAuthCommand,
+  SignUpCommand,
+  ConfirmSignUpCommand,
 } from '@aws-sdk/client-cognito-identity-provider'
 import { User } from './types'
 
@@ -146,4 +148,51 @@ export async function refreshIdToken(refreshToken: string): Promise<AuthTokens> 
     refreshToken: result.RefreshToken || refreshToken,
     expiresIn: result.ExpiresIn,
   }
+}
+
+/**
+ * Register a new user in Cognito with email, password, and tenant_id.
+ */
+export async function signUpUser(
+  email: string,
+  password: string,
+  tenantId: string
+): Promise<{ userConfirmed: boolean; userSub: string }> {
+  const { clientId } = getCognitoConfig()
+  const client = getCognitoClient()
+
+  const command = new SignUpCommand({
+    ClientId: clientId,
+    Username: email,
+    Password: password,
+    UserAttributes: [
+      { Name: 'email', Value: email },
+      { Name: 'custom:tenant_id', Value: tenantId },
+    ],
+  })
+
+  const response = await client.send(command)
+  return {
+    userConfirmed: !!response.UserConfirmed,
+    userSub: response.UserSub || '',
+  }
+}
+
+/**
+ * Confirm user registration via email confirmation code.
+ */
+export async function confirmSignUpUser(
+  email: string,
+  confirmationCode: string
+): Promise<void> {
+  const { clientId } = getCognitoConfig()
+  const client = getCognitoClient()
+
+  const command = new ConfirmSignUpCommand({
+    ClientId: clientId,
+    Username: email,
+    ConfirmationCode: confirmationCode,
+  })
+
+  await client.send(command)
 }
