@@ -164,6 +164,34 @@ class TenantRepo:
         updated_item = _decimals_to_floats(response["Attributes"])
         return updated_item.get("settings", new_settings)
 
+    def bump_kb_version(self, tenant_id: str) -> int:
+        """Atomically bump the tenant's kb_version counter using ADD.
+
+        Returns the new kb_version integer.
+        """
+        now = datetime.now(UTC).isoformat()
+        try:
+            response = self.table.update_item(
+                Key={"tenant_id": tenant_id},
+                UpdateExpression="ADD #kb_ver :one SET #updated_at = :now",
+                ConditionExpression="attribute_exists(tenant_id)",
+                ExpressionAttributeNames={
+                    "#kb_ver": "kb_version",
+                    "#updated_at": "updated_at",
+                },
+                ExpressionAttributeValues={
+                    ":one": Decimal("1"),
+                    ":now": now,
+                },
+                ReturnValues="ALL_NEW",
+            )
+            item = _decimals_to_floats(response["Attributes"])
+            return int(item.get("kb_version", 1))
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                raise NotFound(f"Tenant '{tenant_id}' not found") from e
+            raise ValidationFailed(f"DynamoDB update error: {e}") from e
+
 
 class DocumentRepo:
     """Repository for documents. All operations strictly require tenant_id as first argument.
@@ -384,6 +412,25 @@ class DocumentRepo:
             if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
                 raise NotFound(f"Document '{doc_id}' not found for tenant '{tenant_id}'") from e
             raise
+
+    def update_acl(
+        self,
+        tenant_id: str,
+        doc_id: str,
+        visibility: str,
+        allowed_roles: list[str],
+        allowed_users: list[str],
+    ) -> dict[str, Any]:
+        """Atomically update document ACL fields conditional on tenant_id and doc_id existing."""
+        return self.update_fields(
+            tenant_id=tenant_id,
+            doc_id=doc_id,
+            fields={
+                "visibility": visibility,
+                "allowed_roles": allowed_roles,
+                "allowed_users": allowed_users,
+            },
+        )
 
     def delete(self, tenant_id: str, doc_id: str) -> None:
         """Delete document by PK and SK. Raises NotFound if item does not exist."""

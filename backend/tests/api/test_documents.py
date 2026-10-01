@@ -256,6 +256,7 @@ def test_list_documents(
     mock_doc_repo.list_for_tenant.return_value = (
         [
             {
+                "tenant_id": "acme",
                 "doc_id": "doc-1",
                 "filename": "file1.pdf",
                 "status": "READY",
