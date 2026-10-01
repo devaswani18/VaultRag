@@ -1,0 +1,36 @@
+# Environment & Secrets
+.env
+.env.*
+.demo-credentials.json
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+!*.tfvars.example
+backend.hcl
+!backend.hcl.example
+
+# Node / Frontend
+node_modules/
+dist/
+build/
+
+# Python / Backend
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+coverage/
+backend/build/
+backend/dist/
+
+# IDE / Editor
+.idea/
+.vscode/
+
+# Archives & OS
+*.zip
+.DS_Store

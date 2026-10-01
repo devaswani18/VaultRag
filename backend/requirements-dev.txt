@@ -1,0 +1,11 @@
+-r requirements.txt
+boto3~=1.43.106
+moto[cognitoidp,dynamodb,s3,ssm]~=5.2.3
+pytest~=9.1.1
+pytest-cov~=7.1.0
+respx~=0.23.1
+ruff~=0.16.9
+pyyaml~=6.0.3
+freezegun~=1.5.5
+reportlab~=5.0.1
+pre-commit~=4.6.2
