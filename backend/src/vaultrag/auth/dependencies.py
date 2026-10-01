@@ -69,7 +69,12 @@ def get_ctx(request: Request) -> RequestContext:
         raise Forbidden(f"Tenant '{claims.tenant_id}' is inactive")
 
     # 4. Set request_id, tenant_id, user_id contextvars
-    req_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    req_id = (
+        getattr(request.state, "request_id", None)
+        or request_id_var.get()
+        or request.headers.get("x-request-id")
+        or str(uuid.uuid4())
+    )
     request_id_var.set(req_id)
     tenant_id_var.set(claims.tenant_id)
     user_id_var.set(claims.sub)
