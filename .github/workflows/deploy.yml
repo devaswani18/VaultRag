@@ -1,0 +1,100 @@
+name: Deploy (Dev)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/**'
+      - 'infra/**'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Backend Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+
+      - name: Lint with ruff
+        run: |
+          ruff check backend
+          ruff format --check backend
+
+      - name: Run tests with pytest
+        run: |
+          cd backend
+          pytest
+
+  deploy:
+    name: Deploy to Dev
+    needs: test
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Package Lambda Function
+        run: |
+          bash backend/scripts/package.sh
+
+      - name: Configure AWS Credentials (OIDC Apply Role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_APPLY }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-deploy-dev
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        working-directory: infra/envs/dev
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=dev/terraform.tfstate" \
+            -backend-config="region=${{ vars.AWS_REGION }}" \
+            -backend-config="use_lockfile=true"
+
+      - name: Terraform Apply
+        working-directory: infra/envs/dev
+        run: |
+          terraform apply -auto-approve -var="lambda_zip_path=../../../backend/dist/lambda.zip"
+
+      - name: Smoke Test API Health
+        working-directory: infra/envs/dev
+        run: |
+          API_URL="$(terraform output -raw api_url)"
+          echo "Testing API endpoint: ${API_URL}health"
+          curl -fsS "${API_URL}health"
