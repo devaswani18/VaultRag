@@ -43,3 +43,23 @@ output "table_arns" {
     gaps      = aws_dynamodb_table.gaps.arn
   }
 }
+
+output "user_pool_id" {
+  description = "Cognito User Pool ID"
+  value       = aws_cognito_user_pool.users.id
+}
+
+output "client_id" {
+  description = "Cognito User Pool Client ID"
+  value       = aws_cognito_user_pool_client.client.id
+}
+
+output "cognito_issuer_url" {
+  description = "Cognito OIDC Issuer URL"
+  value       = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.users.id}"
+}
+
+output "cognito_jwks_url" {
+  description = "Cognito JWKS public keys endpoint URL"
+  value       = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.users.id}/.well-known/jwks.json"
+}
