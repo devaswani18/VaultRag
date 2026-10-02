@@ -152,6 +152,48 @@ def test_private_or_allowed_users_chunk_never_stored(memory_qdrant: QdrantClient
     )
     assert stored_user is False
 
+    # 3. Quarantined chunk
+    quarantined_chunk = RetrievedChunk(
+        chunk_id="c-quar",
+        doc_id="d-quar",
+        filename="quar.pdf",
+        page=1,
+        text="Quarantined data",
+        score=0.9,
+        visibility="tenant",
+    )
+    quarantined_chunk.quarantined = True  # type: ignore[attr-defined]
+    stored_quar = store(
+        ctx,
+        question_vector=vec,
+        response=resp,
+        source_chunks=[quarantined_chunk],
+        kb_version=1,
+        qdrant_client=memory_qdrant,
+    )
+    assert stored_quar is False
+
+    # 4. Flagged injection risk chunk
+    flagged_chunk = RetrievedChunk(
+        chunk_id="c-flag",
+        doc_id="d-flag",
+        filename="flag.pdf",
+        page=1,
+        text="Injection risk chunk",
+        score=0.9,
+        visibility="tenant",
+        injection_risk="high",
+    )
+    stored_flag = store(
+        ctx,
+        question_vector=vec,
+        response=resp,
+        source_chunks=[flagged_chunk],
+        kb_version=1,
+        qdrant_client=memory_qdrant,
+    )
+    assert stored_flag is False
+
     # Verify nothing was added
     assert lookup(ctx, question_vector=vec, kb_version=1, qdrant_client=memory_qdrant) is None
 

@@ -174,13 +174,20 @@ def store(
         logger.info("Semantic cache skipping store: response is abstained or partial")
         return False
 
-    # Check chunks for user-level restrictions
+    # Check chunks for user-level restrictions, quarantine, or flagged status
     for chunk in source_chunks:
         vis = getattr(chunk, "visibility", "tenant")
         users = getattr(chunk, "allowed_users", [])
-        if vis == "private" or bool(users):
+        is_quarantined = (
+            getattr(chunk, "quarantined", False) or getattr(chunk, "status", "") == "quarantined"
+        )
+        is_flagged = getattr(chunk, "flagged", False) or getattr(
+            chunk, "injection_risk", "low"
+        ) not in ("low", None)
+        if vis == "private" or bool(users) or is_quarantined or is_flagged:
             logger.info(
-                "Semantic cache skipping store: response contains private or user-restricted chunk"
+                "Semantic cache skipping store: response contains "
+                "private, user-restricted, quarantined, or flagged chunk"
             )
             return False
 
