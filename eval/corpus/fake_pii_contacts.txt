@@ -1,0 +1,13 @@
+Evalco Synthetic Vendor Billing Contacts (Test Data Only)
+
+Vendor Accounts Payable Directory:
+1. Apex Logistics Billing:
+   Corporate Test Card: 4532-0150-1234-5671
+   Account Manager Phone: +91-98765-43210
+   Billing Tax PAN ID: ABCCE1234F
+
+2. Nexus Cloud Systems:
+   Support Dispatch: +91-98111-22334
+   Billing Reference: vendor-apex-billing@evalco-synthetic.example.com
+
+Note: All records above are synthetic dummy numbers designated strictly for sandbox security testing.

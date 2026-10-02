@@ -1,0 +1,65 @@
+name: Evaluation Harness (Live)
+
+on:
+  schedule:
+    # Nightly run at 02:00 UTC
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      category:
+        description: "Specific evaluation category to run (leave blank for all)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  eval-live:
+    name: Live Benchmark (Gemini)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: "backend/requirements-dev.txt"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements-dev.txt
+
+      # Note: Free-tier Gemini API keys are subject to a 15 RPM rate limit.
+      # eval/run_eval.py incorporates backoff and a 0.5s pause between live requests
+      # to ensure continuous compliance without triggering HTTP 429 rate limit exceptions.
+      - name: Run live evaluation benchmark
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          ONLY_FLAG=""
+          if [ -n "${{ github.event.inputs.category }}" ]; then
+            ONLY_FLAG="--only ${{ github.event.inputs.category }}"
+          fi
+          PYTHONPATH=backend/src python eval/run_eval.py --mode live $ONLY_FLAG
+
+      - name: Publish Step Summary
+        if: always()
+        run: |
+          if [ -f eval/out/report.md ]; then
+            cat eval/out/report.md >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No eval report generated." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload Evaluation Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-benchmark-report
+          path: eval/out/
+          retention-days: 30

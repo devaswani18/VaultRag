@@ -169,7 +169,10 @@ class TestQueryAnswerPII:
         client: TestClient,
     ) -> None:
         mock_verify.return_value = _mock_claims("acme")
-        tenant_data = {"status": "active", "settings": {"pii_mode": "redact"}}
+        tenant_data = {
+            "status": "active",
+            "settings": {"pii_mode": "redact", "cache_enabled": False},
+        }
         mock_auth_repo = MagicMock()
         mock_auth_repo.get.return_value = tenant_data
         mock_auth_repo_cls.return_value = mock_auth_repo

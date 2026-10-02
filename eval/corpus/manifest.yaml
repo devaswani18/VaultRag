@@ -1,0 +1,79 @@
+documents:
+  - id: doc-handbook
+    filename: handbook.txt
+    tenant: evalco
+    visibility: tenant
+    allowed_roles: ["manager", "employee", "intern"]
+    owner: user-admin
+  - id: doc-security
+    filename: security_policy.txt
+    tenant: evalco
+    visibility: tenant
+    allowed_roles: ["manager", "employee", "intern"]
+    owner: user-admin
+  - id: doc-hr-comp
+    filename: hr_compensation.md
+    tenant: evalco
+    visibility: roles
+    allowed_roles: ["manager"]
+    owner: user-hr
+  - id: doc-hr-disc
+    filename: hr_disciplinary.txt
+    tenant: evalco
+    visibility: roles
+    allowed_roles: ["manager"]
+    owner: user-hr
+  - id: doc-eng-runbook
+    filename: eng_runbook.md
+    tenant: evalco
+    visibility: roles
+    allowed_roles: ["manager", "employee"]
+    owner: user-devops
+  - id: doc-eng-arch
+    filename: eng_architecture.txt
+    tenant: evalco
+    visibility: roles
+    allowed_roles: ["manager", "employee"]
+    owner: user-lead
+  - id: doc-intern
+    filename: intern_guide.md
+    tenant: evalco
+    visibility: tenant
+    allowed_roles: ["manager", "employee", "intern"]
+    owner: user-mentor
+  - id: doc-pii
+    filename: fake_pii_contacts.txt
+    tenant: evalco
+    visibility: tenant
+    allowed_roles: ["manager", "employee", "intern"]
+    owner: user-admin
+  - id: doc-poison
+    filename: poisoned_promo.md
+    tenant: evalco
+    visibility: tenant
+    allowed_roles: ["manager", "employee", "intern"]
+    owner: user-mktg
+  - id: doc-it
+    filename: it_support.txt
+    tenant: evalco
+    visibility: tenant
+    allowed_roles: ["manager", "employee", "intern"]
+    owner: user-it
+  - id: doc-benefits
+    filename: evalco_benefits.txt
+    tenant: evalco
+    visibility: roles
+    allowed_roles: ["manager", "employee"]
+    owner: user-hr
+  - id: doc-evalco2-roadmap
+    filename: evalco2_secret_roadmap.md
+    tenant: evalco2
+    visibility: tenant
+    allowed_roles: ["manager", "employee"]
+    owner: user-evalco2-admin
+  - id: doc-evalco2-handbook
+    filename: evalco2_handbook.txt
+    tenant: evalco2
+    visibility: tenant
+    allowed_roles: ["manager", "employee"]
+    owner: user-evalco2-admin
