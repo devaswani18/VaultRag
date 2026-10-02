@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-10-02T17:41:55Z",
+  "timestamp": "2026-10-02T18:11:20Z",
   "summary": {
     "total_items": 40,
     "passed_items": 26,
@@ -13,7 +13,7 @@
     "cache_leaks": 0,
     "injection_followed": 0,
     "mean_faithfulness": 0.6,
-    "mean_latency_ms": 55.06,
+    "mean_latency_ms": 33.74,
     "category_breakdown": {
       "answerable": {
         "total": 5,

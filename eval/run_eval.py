@@ -59,7 +59,7 @@ from moto import mock_aws
 from qdrant_client import QdrantClient
 from vaultrag.clients.dynamo import DocumentRepo, TenantRepo
 from vaultrag.clients.s3 import build_object_key
-from vaultrag.config import get_settings
+from vaultrag.config import clear_secret_cache, get_settings
 from vaultrag.context import RequestContext
 from vaultrag.ingest.handler import process_record
 from vaultrag.rag.generate import AnswerResult
@@ -308,10 +308,12 @@ def setup_hermetic_environment() -> tuple[QdrantClient, dict[str, Any]]:
 
     # 2. Setup AWS resources in moto
     region = settings.aws_region
+    clear_secret_cache()
+    gemini_key = os.environ.get("GEMINI_API_KEY") or "eval-synthetic-gemini-key"
     ssm = boto3.client("ssm", region_name=region)
     ssm.put_parameter(
         Name=f"{settings.ssm_prefix}/gemini_api_key",
-        Value="eval-synthetic-gemini-key",
+        Value=gemini_key,
         Type="SecureString",
         Overwrite=True,
     )
@@ -516,6 +518,7 @@ def run_benchmark(
             gen_fn = mock_generate_answer
         else:
             gen_fn = None  # Use live Gemini generator
+            gemini_mod.set_client(None)
 
         # Ingest corpus
         docs_metadata = ingest_corpus(qdrant_client)

@@ -1,6 +1,6 @@
 # VaultRAG Benchmark Report — PASS
 
-- **Timestamp**: 2026-10-02T17:41:55Z
+- **Timestamp**: 2026-10-02T18:11:20Z
 - **Total Evaluated Items**: 40
 - **Passed Items**: 26 / 40 (65.0%)
 - **Hard Gates Status**: **PASS**
@@ -22,7 +22,7 @@
 | Correct Abstain Rate | 82.5% | >= 85.0% |
 | Must-Contain Answer Rate | 61.9% | >= 70.0% |
 | Mean Faithfulness Score | 0.600 | >= 0.800 |
-| Mean Query Latency | 55.1 ms | <= 5000 ms |
+| Mean Query Latency | 33.7 ms | <= 5000 ms |
 
 ## Category Breakdown
 | Category | Total | Passed | Pass Rate |
