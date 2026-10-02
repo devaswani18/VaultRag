@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Generator
 from typing import Any
 
@@ -9,6 +10,24 @@ from moto import mock_aws
 from qdrant_client import QdrantClient, models
 
 from vaultrag.clients.qdrant import set_client
+
+_moto_admin_lock = threading.Lock()
+
+
+def _wrap_table_threadsafe(table: Any) -> Any:
+    for m_name in ("put_item", "update_item", "get_item", "delete_item", "query", "scan"):
+        if hasattr(table, m_name):
+            orig_m = getattr(table, m_name)
+
+            def _make_wrapped(m: Any) -> Any:
+                def _locked(*args: Any, **kwargs: Any) -> Any:
+                    with _moto_admin_lock:
+                        return m(*args, **kwargs)
+
+                return _locked
+
+            setattr(table, m_name, _make_wrapped(orig_m))
+    return table
 
 
 @pytest.fixture
@@ -29,6 +48,13 @@ def aws_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def mock_admin_env(aws_env: None) -> Generator[dict[str, Any], None, None]:
     with mock_aws():
         dynamodb = boto3.resource("dynamodb", region_name="ap-south-1")
+        orig_Table = dynamodb.Table
+
+        def _locked_Table(name: str) -> Any:
+            tbl = orig_Table(name)
+            return _wrap_table_threadsafe(tbl)
+
+        dynamodb.Table = _locked_Table
         s3 = boto3.client("s3", region_name="ap-south-1")
 
         # 1. Audit table
