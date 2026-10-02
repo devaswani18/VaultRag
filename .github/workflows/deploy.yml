@@ -47,7 +47,7 @@ jobs:
           pytest
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: "npm"
@@ -108,7 +108,7 @@ jobs:
           terraform apply -auto-approve -var="lambda_zip_path=../../../backend/dist/lambda.zip"
 
       - name: Set up Node.js for Frontend Build
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: "npm"
