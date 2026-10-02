@@ -96,16 +96,17 @@ resource "aws_iam_role_policy" "lambda_ingest" {
 # concurrency quotas (typically 10-50 total across all functions in the region).
 # Setting reserved concurrency could exhaust the regional quota for other workloads.
 resource "aws_lambda_function" "ingest" {
-  function_name    = "${local.name_prefix}-ingest"
-  role             = aws_iam_role.lambda_ingest.arn
-  runtime          = "python3.12"
-  architectures    = ["arm64"]
-  memory_size      = 1024
-  timeout          = 300
-  handler          = "vaultrag.ingest.handler.handler"
-  s3_bucket        = aws_s3_bucket.artifacts.id
-  s3_key           = aws_s3_object.lambda_zip.key
-  source_code_hash = filebase64sha256(var.lambda_zip_path)
+  function_name                  = "${local.name_prefix}-ingest"
+  role                           = aws_iam_role.lambda_ingest.arn
+  runtime                        = "python3.12"
+  architectures                  = ["arm64"]
+  memory_size                    = 1024
+  timeout                        = 300
+  handler                        = "vaultrag.ingest.handler.handler"
+  s3_bucket                      = aws_s3_bucket.artifacts.id
+  s3_key                         = aws_s3_object.lambda_zip.key
+  source_code_hash               = filebase64sha256(var.lambda_zip_path)
+  reserved_concurrent_executions = var.lambda_reserved_concurrency
 
   environment {
     variables = {

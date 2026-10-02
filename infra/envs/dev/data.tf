@@ -260,7 +260,7 @@ resource "aws_s3_bucket_cors_configuration" "docs" {
   cors_rule {
     allowed_headers = ["*"]
     allowed_methods = ["POST", "GET", "HEAD"]
-    allowed_origins = var.allowed_origins
+    allowed_origins = local.all_allowed_origins
     expose_headers  = ["ETag"]
     max_age_seconds = 3000
   }

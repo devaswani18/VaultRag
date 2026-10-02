@@ -1,0 +1,36 @@
+version: 2
+updates:
+  # Python backend dependencies
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  # React frontend dependencies
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  # GitHub Actions CI/CD workflows
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  # Terraform Dev Environment Infrastructure
+  - package-ecosystem: "terraform"
+    directory: "/infra/envs/dev"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  # Terraform Bootstrap Infrastructure (OIDC, S3 State, Budgets)
+  - package-ecosystem: "terraform"
+    directory: "/infra/bootstrap"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10

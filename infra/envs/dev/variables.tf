@@ -21,3 +21,9 @@ variable "allowed_origins" {
   type        = list(string)
   default     = ["http://localhost:5173"]
 }
+
+variable "lambda_reserved_concurrency" {
+  description = "Reserved concurrency for Lambda functions to protect free tier. Null preserves unreserved pool for accounts with <100 concurrency limit."
+  type        = number
+  default     = null
+}

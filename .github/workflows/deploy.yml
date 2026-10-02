@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'backend/**'
+      - 'frontend/**'
       - 'infra/**'
   workflow_dispatch:
 
@@ -15,7 +16,7 @@ concurrency:
 
 jobs:
   test:
-    name: Backend Lint & Test
+    name: Backend & Frontend Lint & Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -30,7 +31,7 @@ jobs:
             backend/requirements.txt
             backend/requirements-dev.txt
 
-      - name: Install dependencies
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt -r backend/requirements-dev.txt
@@ -40,10 +41,24 @@ jobs:
           ruff check backend
           ruff format --check backend
 
-      - name: Run tests with pytest
+      - name: Run backend tests with pytest
         run: |
           cd backend
           pytest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "frontend/package-lock.json"
+
+      - name: Install Frontend dependencies & test
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run lint
+          npm test -- --run
 
   deploy:
     name: Deploy to Dev
@@ -92,9 +107,42 @@ jobs:
         run: |
           terraform apply -auto-approve -var="lambda_zip_path=../../../backend/dist/lambda.zip"
 
-      - name: Smoke Test API Health
+      - name: Set up Node.js for Frontend Build
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "frontend/package-lock.json"
+
+      - name: Build Frontend Application
+        working-directory: frontend
+        run: |
+          npm ci
+          API_URL=$(cd ../infra/envs/dev && terraform output -raw api_url)
+          CLIENT_ID=$(cd ../infra/envs/dev && terraform output -raw client_id)
+          USER_POOL_ID=$(cd ../infra/envs/dev && terraform output -raw user_pool_id)
+          VITE_API_URL="${API_URL}" \
+          VITE_COGNITO_REGION="${{ vars.AWS_REGION }}" \
+          VITE_COGNITO_CLIENT_ID="${CLIENT_ID}" \
+          VITE_COGNITO_USER_POOL_ID="${USER_POOL_ID}" \
+          npm run build
+
+      - name: Deploy Frontend to S3 Static Bucket
+        run: |
+          SITE_BUCKET=$(cd infra/envs/dev && terraform output -raw site_bucket_name)
+          aws s3 sync frontend/dist "s3://${SITE_BUCKET}" --delete
+
+      - name: Invalidate CloudFront CDN Cache
+        run: |
+          DISTRIBUTION_ID=$(cd infra/envs/dev && terraform output -raw distribution_id)
+          aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" --paths "/*"
+
+      - name: Smoke Test Deployed Endpoints
         working-directory: infra/envs/dev
         run: |
           API_URL="$(terraform output -raw api_url)"
+          WEB_URL="$(terraform output -raw web_url)"
           echo "Testing API endpoint: ${API_URL}health"
           curl -fsS "${API_URL}health"
+          echo "Testing Web frontend: ${WEB_URL}"
+          curl -fsS "${WEB_URL}"

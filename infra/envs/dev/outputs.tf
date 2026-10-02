@@ -63,3 +63,18 @@ output "cognito_jwks_url" {
   description = "Cognito JWKS public keys endpoint URL"
   value       = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.users.id}/.well-known/jwks.json"
 }
+
+output "web_url" {
+  description = "Public HTTPS CloudFront URL for the VaultRAG frontend"
+  value       = "https://${aws_cloudfront_distribution.web.domain_name}"
+}
+
+output "distribution_id" {
+  description = "CloudFront distribution ID for frontend static site"
+  value       = aws_cloudfront_distribution.web.id
+}
+
+output "site_bucket_name" {
+  description = "Name of the private S3 bucket hosting frontend static assets"
+  value       = aws_s3_bucket.web.id
+}

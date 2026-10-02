@@ -241,7 +241,7 @@ resource "aws_iam_policy" "gha_apply_policy" {
         ]
         Resource = "arn:aws:events:${var.aws_region}:${data.aws_caller_identity.current.account_id}:rule/${var.project}-*"
       },
-      # Statement 9: CloudFront distribution and cache invalidation management
+      # Statement 9: CloudFront distribution, OAC, response headers policy, and cache invalidation management
       {
         Sid    = "CloudFrontManagement"
         Effect = "Allow"
@@ -254,7 +254,17 @@ resource "aws_iam_policy" "gha_apply_policy" {
           "cloudfront:TagResource",
           "cloudfront:UntagResource",
           "cloudfront:CreateInvalidation",
-          "cloudfront:GetInvalidation"
+          "cloudfront:GetInvalidation",
+          "cloudfront:CreateOriginAccessControl",
+          "cloudfront:GetOriginAccessControl",
+          "cloudfront:UpdateOriginAccessControl",
+          "cloudfront:DeleteOriginAccessControl",
+          "cloudfront:ListOriginAccessControls",
+          "cloudfront:CreateResponseHeadersPolicy",
+          "cloudfront:GetResponseHeadersPolicy",
+          "cloudfront:UpdateResponseHeadersPolicy",
+          "cloudfront:DeleteResponseHeadersPolicy",
+          "cloudfront:ListResponseHeadersPolicies"
         ]
         Resource = "*"
       },

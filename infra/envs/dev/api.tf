@@ -131,16 +131,17 @@ resource "aws_s3_object" "lambda_zip" {
 # 4. Lambda Function (Python 3.12 / ARM64 / 512 MB / 30s timeout)
 # ------------------------------------------------------------------------------
 resource "aws_lambda_function" "api" {
-  function_name    = "${local.name_prefix}-api"
-  role             = aws_iam_role.lambda_api.arn
-  runtime          = "python3.12"
-  architectures    = ["arm64"]
-  memory_size      = 512
-  timeout          = 30
-  handler          = "vaultrag.api.handler.handler"
-  s3_bucket        = aws_s3_bucket.artifacts.id
-  s3_key           = aws_s3_object.lambda_zip.key
-  source_code_hash = filebase64sha256(var.lambda_zip_path)
+  function_name                  = "${local.name_prefix}-api"
+  role                           = aws_iam_role.lambda_api.arn
+  runtime                        = "python3.12"
+  architectures                  = ["arm64"]
+  memory_size                    = 512
+  timeout                        = 30
+  handler                        = "vaultrag.api.handler.handler"
+  s3_bucket                      = aws_s3_bucket.artifacts.id
+  s3_key                         = aws_s3_object.lambda_zip.key
+  source_code_hash               = filebase64sha256(var.lambda_zip_path)
+  reserved_concurrent_executions = var.lambda_reserved_concurrency
 
   environment {
     variables = {
@@ -176,7 +177,7 @@ resource "aws_lambda_function_url" "api" {
   authorization_type = "NONE"
 
   cors {
-    allow_origins = var.allowed_origins
+    allow_origins = local.all_allowed_origins
     allow_methods = ["GET", "POST", "PATCH", "DELETE"]
     allow_headers = ["authorization", "content-type", "x-request-id"]
     max_age       = 3600
