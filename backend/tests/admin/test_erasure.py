@@ -442,11 +442,40 @@ def test_audit_events_present_on_erasure(mock_admin_env: dict[str, Any]) -> None
     assert "certificate_sha256" in erasure_events[1]["details"]
 
 
-@pytest.mark.xfail(reason="Cache deletion implemented in Stage 17")
-def test_cache_deletion_stage17_placeholder() -> None:
-    """Test asserting semantic query cache invalidation once cache layer is built in Stage 17."""
-    # When Stage 17 implements semantic cache, this should assert invalidated keys > 0
+def test_cache_deletion_step(mock_admin_env: dict[str, Any]) -> None:
+    """Test asserting semantic query cache invalidation during document erasure."""
     from vaultrag.admin.erasure import invalidate_doc_cache
+    from vaultrag.rag.retrieve import RetrievedChunk
+    from vaultrag.rag.semantic_cache import store
 
-    count = invalidate_doc_cache("tenant-a", "doc-test")
-    assert count > 0  # Expected to fail until Stage 17 semantic cache is integrated
+    ctx = _make_ctx(tenant_id="tenant-a", user_id="user-alice", role=Role.employee)
+    doc_id = "doc-test"
+
+    # Seed an entry into the semantic cache referencing doc_id
+    q_vec = [0.1] * 768
+    chunk = RetrievedChunk(
+        chunk_id="chunk-1",
+        doc_id=doc_id,
+        filename="test.pdf",
+        page=1,
+        text="Sample text",
+        score=0.9,
+    )
+    resp = {
+        "answer": "Cached answer",
+        "trust": {"score": 0.95, "abstained": False, "partial": False},
+        "sources": [{"doc_id": doc_id}],
+    }
+    stored = store(
+        ctx,
+        question_vector=q_vec,
+        response=resp,
+        source_chunks=[chunk],
+        kb_version=1,
+        qdrant_client=mock_admin_env["qdrant"],
+    )
+    assert stored is True
+
+    # Invalidate cache for the doc
+    count = invalidate_doc_cache("tenant-a", doc_id, qdrant_client=mock_admin_env["qdrant"])
+    assert count == 1

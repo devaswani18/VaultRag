@@ -9,8 +9,10 @@ import logging
 import time
 from typing import Any
 
+from vaultrag.admin.gaps import record_knowledge_gap
 from vaultrag.audit.hashchain import append_event
 from vaultrag.audit.usage import increment, reserve_query
+from vaultrag.clients import gemini as gemini_client
 from vaultrag.clients.dynamo import TenantRepo
 from vaultrag.context import RequestContext
 from vaultrag.errors import QuotaExceeded, ValidationFailed
@@ -18,6 +20,8 @@ from vaultrag.rag.faithfulness import check as check_faithfulness
 from vaultrag.rag.generate import answer as generate_answer
 from vaultrag.rag.output_guard import check_output
 from vaultrag.rag.retrieve import RetrievedChunk, retrieve
+from vaultrag.rag.semantic_cache import lookup as cache_lookup
+from vaultrag.rag.semantic_cache import store as cache_store
 from vaultrag.security.injection_guard import scan_text
 from vaultrag.security.pii_guard import apply_policy
 
@@ -95,8 +99,13 @@ def _finish_and_audit(
     start_time: float,
     q_res: Any = None,
     chunks: list[RetrievedChunk] | None = None,
+    *,
+    cached: bool = False,
+    redacted_question: str | None = None,
+    top_score: float = 0.0,
+    min_faithfulness: float = 0.6,
 ) -> dict[str, Any]:
-    """Record query audit event and increment usage counters without failing read requests."""
+    """Record query audit event, increment usage counters, and record knowledge gaps."""
     duration_ms = round((time.monotonic() - start_time) * 1000, 2)
     q_hash = hashlib.sha256(question.encode("utf-8")).hexdigest()
 
@@ -115,7 +124,7 @@ def _finish_and_audit(
         "question_sha256": q_hash,
         "trust_score": response_dict.get("trust", {}).get("score", 0.0),
         "abstained": is_abstained,
-        "cached": False,
+        "cached": cached,
         "n_sources": len(sources),
         "doc_ids": doc_ids,
         "pii_types_in_question": pii_types_in_q,
@@ -145,11 +154,25 @@ def _finish_and_audit(
             queries=0,
             chunks=len(chunks or []),
             est_tokens=est_tokens,
-            cache_hits=0,
-            cache_misses=1,
+            cache_hits=1 if cached else 0,
+            cache_misses=0 if cached else 1,
         )
     except Exception as e:
         logger.error("Failed to increment query usage: %s", e)
+
+    # Record knowledge gap if query abstained or trust score < min_faithfulness
+    trust_score = float(response_dict.get("trust", {}).get("score", 0.0))
+    if (is_abstained or trust_score < min_faithfulness) and redacted_question:
+        gap_reason = str(reasons[0]) if (is_abstained and reasons) else "insufficient_faithfulness"
+        try:
+            record_knowledge_gap(
+                ctx,
+                redacted_question=redacted_question,
+                top_score=top_score,
+                reason=gap_reason,
+            )
+        except Exception as gap_err:
+            logger.warning("Failed to record knowledge gap: %s", gap_err)
 
     return response_dict
 
@@ -170,9 +193,10 @@ def execute_query(
     _repo_cls = tenant_repo_cls or TenantRepo
 
     # 0. Load tenant settings
-    tenant_repo = _repo_cls()
+    tenant_rec: dict[str, Any] = {}
     try:
-        tenant_rec = tenant_repo.get(ctx.tenant_id)
+        tenant_repo = _repo_cls()
+        tenant_rec = tenant_repo.get(ctx.tenant_id) or {}
         settings = tenant_rec.get("settings", {})
     except Exception:
         settings = {}
@@ -217,10 +241,48 @@ def execute_query(
 
     clean_question = q_res.text if pii_mode == "redact" else question
 
-    # 3. Retrieve top_k chunks through ACL-scoped vector retrieval
-    chunks = _retrieve(ctx, clean_question, top_k=top_k)
+    # 3. Embed clean_question once for both cache lookup and vector retrieval
+    cache_enabled = bool(settings.get("cache_enabled", True))
+    cache_similarity_threshold = float(settings.get("cache_similarity_threshold", 0.95))
+    kb_version = int(tenant_rec.get("kb_version", 1))
 
-    # 4. Retrieval Gate: if no results OR best score < min_retrieval_score, abstain immediately
+    try:
+        vectors = gemini_client.embed_texts([clean_question], task_type="RETRIEVAL_QUERY")
+        question_vector = vectors[0] if vectors else None
+    except Exception as e:
+        logger.warning("Failed to embed question: %s", e)
+        question_vector = None
+
+    # 4. Semantic Cache Lookup (BEFORE retrieval)
+    if cache_enabled and question_vector is not None:
+        cached_resp = cache_lookup(
+            ctx,
+            question_vector=question_vector,
+            kb_version=kb_version,
+            similarity_threshold=cache_similarity_threshold,
+        )
+        if cached_resp is not None:
+            logger.info("Semantic cache hit for tenant=%s, user=%s", ctx.tenant_id, ctx.user_id)
+            return _finish_and_audit(
+                ctx,
+                question,
+                cached_resp,
+                start_time,
+                q_res,
+                chunks=None,
+                cached=True,
+                redacted_question=clean_question,
+                top_score=1.0,
+                min_faithfulness=min_faithfulness,
+            )
+
+    # 5. Retrieve top_k chunks through ACL-scoped vector retrieval (reusing question_vector)
+    try:
+        chunks = _retrieve(ctx, clean_question, top_k=top_k, query_vector=question_vector)
+    except TypeError:
+        chunks = _retrieve(ctx, clean_question, top_k=top_k)
+
+    # 6. Retrieval Gate: if no results OR best score < min_retrieval_score, abstain immediately
     best_score = max((c.score for c in chunks), default=0.0)
     if not chunks or best_score < min_retrieval_score:
         logger.info(
@@ -244,9 +306,20 @@ def execute_query(
             "pii_in_answer": False,
             "injection_attempt": injection_attempt,
         }
-        return _finish_and_audit(ctx, question, resp, start_time, q_res, chunks)
+        return _finish_and_audit(
+            ctx,
+            question,
+            resp,
+            start_time,
+            q_res,
+            chunks,
+            cached=False,
+            redacted_question=clean_question,
+            top_score=best_score,
+            min_faithfulness=min_faithfulness,
+        )
 
-    # 5. Generate structured answer with canary and XML sandboxing
+    # 7. Generate structured answer with canary and XML sandboxing
     result = _generate(clean_question, chunks)
 
     # Handle model output failure / invalid JSON retry failure
@@ -271,9 +344,20 @@ def execute_query(
             "pii_in_answer": False,
             "injection_attempt": injection_attempt,
         }
-        return _finish_and_audit(ctx, question, resp, start_time, q_res, chunks)
+        return _finish_and_audit(
+            ctx,
+            question,
+            resp,
+            start_time,
+            q_res,
+            chunks,
+            cached=False,
+            redacted_question=clean_question,
+            top_score=best_score,
+            min_faithfulness=min_faithfulness,
+        )
 
-    # 6. Output guard verification (canary leak, untrusted URLs, system prompt leak)
+    # 8. Output guard verification (canary leak, untrusted URLs, system prompt leak)
     out_check = check_output(answer=result.answer, chunks=chunks, canary=result.canary)
     if not out_check.ok:
         logger.warning("Output guard blocked answer: reasons=%s", out_check.reasons)
@@ -291,9 +375,20 @@ def execute_query(
             "pii_in_answer": False,
             "injection_attempt": injection_attempt,
         }
-        return _finish_and_audit(ctx, question, resp, start_time, q_res, chunks)
+        return _finish_and_audit(
+            ctx,
+            question,
+            resp,
+            start_time,
+            q_res,
+            chunks,
+            cached=False,
+            redacted_question=clean_question,
+            top_score=best_score,
+            min_faithfulness=min_faithfulness,
+        )
 
-    # 7. Check factual faithfulness of answer segments against source chunks
+    # 9. Check factual faithfulness of answer segments against source chunks
     faith_res = check_faithfulness(result.segments, chunks, tenant_settings=settings)
 
     # Decision logic
@@ -330,7 +425,18 @@ def execute_query(
                 "pii_in_answer": False,
                 "injection_attempt": injection_attempt,
             }
-            return _finish_and_audit(ctx, question, resp, start_time, q_res, chunks)
+            return _finish_and_audit(
+                ctx,
+                question,
+                resp,
+                start_time,
+                q_res,
+                chunks,
+                cached=False,
+                redacted_question=clean_question,
+                top_score=best_score,
+                min_faithfulness=min_faithfulness,
+            )
 
         reduced_text = " ".join(str(s.get("text", "")).strip() for s in supported_segments)
         final_answer = (
@@ -341,12 +447,12 @@ def execute_query(
         partial = True
         trust_reasons = ["partial_support"]
 
-    # 8. Guard answer with PII policy
+    # 10. Guard answer with PII policy
     ans_res = apply_policy(final_answer, mode=pii_mode)
     masked_answer = ans_res.text if pii_mode == "redact" else final_answer
     pii_in_answer = bool(ans_res.findings_summary) if pii_mode != "off" else False
 
-    # 9. Format sources with PII-guarded snippets
+    # 11. Format sources with PII-guarded snippets
     cited_ids = set(result.citations)
     sources = _format_sources(chunks, cited_ids, pii_mode)
 
@@ -364,4 +470,29 @@ def execute_query(
         "pii_in_answer": pii_in_answer,
         "injection_attempt": injection_attempt,
     }
-    return _finish_and_audit(ctx, question, resp, start_time, q_res, chunks)
+
+    # 12. Store in semantic cache if eligible (grounded, non-abstained, non-partial)
+    if cache_enabled and question_vector is not None and not abstained and not partial:
+        try:
+            cache_store(
+                ctx,
+                question_vector=question_vector,
+                response=resp,
+                source_chunks=chunks,
+                kb_version=kb_version,
+            )
+        except Exception as cache_err:
+            logger.warning("Failed to store in semantic cache: %s", cache_err)
+
+    return _finish_and_audit(
+        ctx,
+        question,
+        resp,
+        start_time,
+        q_res,
+        chunks,
+        cached=False,
+        redacted_question=clean_question,
+        top_score=best_score,
+        min_faithfulness=min_faithfulness,
+    )

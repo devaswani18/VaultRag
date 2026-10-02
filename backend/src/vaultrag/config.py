@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     gaps_table: str = "vaultrag-dev-gaps"
     docs_bucket: str = "vaultrag-docs-dev"
     qdrant_collection: str = "vaultrag_chunks"
+    cache_collection: str = "vaultrag_cache"
+    cache_similarity_threshold: float = 0.95
     embedding_model: str = "gemini-embedding-001"
     generation_model: str = "gemini-3.5-flash-lite"
     embedding_dim: int = 768
