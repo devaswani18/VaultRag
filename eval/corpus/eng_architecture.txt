@@ -1,0 +1,10 @@
+Evalco Engineering Architecture and Service Blueprint
+
+1. Application Framework
+All microservices are authored in Python using the FastAPI web framework. Inter-service communication relies on gRPC with protocol buffers for latency-sensitive paths.
+
+2. Data Persistence
+Primary operational database is AWS DynamoDB with single-table design. Vector representations are indexed in Qdrant collections using 768-dimensional cosine distance.
+
+3. Background Processing
+Asynchronous worker pipelines utilize Amazon SQS with dead-letter queues configured for maximum 3 retries.

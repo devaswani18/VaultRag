@@ -1,0 +1,10 @@
+Evalco IT Helpdesk and Hardware Provisioning
+
+1. Hardware Refresh Cycle
+Laptops are refreshed every 36 months. Standard issue hardware includes M3 Pro MacBooks for engineering and ThinkPad X1 Carbon for operations.
+
+2. Ticket Submission
+Open IT support requests by sending an email to helpdesk@evalco.com or messaging the #it-help Slack channel. Response SLA for standard tickets is 24 hours.
+
+3. Peripheral Allowances
+Remote staff receive a one-time home office ergonomic stipend of $500 for external monitors and keyboards.
