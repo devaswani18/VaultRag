@@ -22,6 +22,7 @@ DEFAULT_TENANT_SETTINGS: dict[str, Any] = {
     "daily_query_quota": 200,
     "cache_enabled": True,
     "retain_original_files": True,
+    "llm_judge_enabled": False,
     "settings_version": 1,
 }
 

@@ -36,6 +36,18 @@ export const Layout: React.FC = () => {
               <Files size={16} />
               <span>Documents</span>
             </NavLink>
+            {user?.roles?.includes('admin') && (
+              <NavLink
+                to="/admin"
+                className={({ isActive }) =>
+                  `nav-link ${isActive ? 'active' : ''}`
+                }
+                data-testid="nav-link-admin"
+              >
+                <Shield size={16} />
+                <span>Trust Center</span>
+              </NavLink>
+            )}
           </nav>
         </div>
 
