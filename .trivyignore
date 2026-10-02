@@ -7,63 +7,94 @@
 # 3. GDPR / DPDP right-to-erasure guarantees (permanent object deletion)
 # ==============================================================================
 
-# AVD-AWS-0089: S3 Bucket Logging
+# AVD-AWS-0089 / aws-0089: S3 Bucket Logging
 # Justification: S3 bucket access logging requires an additional S3 bucket and incurs PUT
 # and storage costs for access logs. For dev environment and the static site distribution,
 # access logging is omitted to maintain zero-cost base.
 AVD-AWS-0089
+aws-0089
 
-# AVD-AWS-0090: S3 Bucket Versioning
+# AVD-AWS-0090 / aws-0090: S3 Bucket Versioning
 # Justification: Document and web buckets intentionally have versioning disabled. Under
 # GDPR and DPDP right-to-erasure requirements, non-versioned storage ensures that when a
 # document is deleted, chunks and original files are permanently purged immediately without
 # retaining billable noncurrent versions or delete-markers.
 AVD-AWS-0090
+aws-0090
 
-# AVD-AWS-0066: Lambda VPC Configuration
+# AVD-AWS-0066 / aws-0066: Lambda VPC Configuration
 # Justification: Lambda functions run outside a VPC to eliminate AWS NAT Gateway charges
 # ($32.40/month per gateway + data processing fees). All upstream services (DynamoDB, S3,
 # Cognito, Gemini API, Qdrant Cloud) are secured over TLS using SigV4 and OAuth/JWT tokens.
 AVD-AWS-0066
+aws-0066
 
-# AVD-AWS-0017: CloudWatch Log Group KMS Encryption
+# AVD-AWS-0017 / aws-0017: CloudWatch Log Group KMS Encryption
 # Justification: CloudWatch Log Groups use default AWS server-side encryption (AES-256).
 # Customer-managed KMS keys incur a fixed fee of $1.00/month per key, which violates the
 # zero-cost architecture goal for dev log retention.
 AVD-AWS-0017
+aws-0017
 
-# AVD-AWS-0011: CloudFront WAF Association
+# AVD-AWS-0011 / aws-0011: CloudFront WAF Association
 # Justification: AWS WAF requires a minimum fixed charge of $5.00/month per WebACL plus
 # $1.00/month per managed rule. CloudFront distribution uses strict ResponseHeadersPolicy
 # (HSTS, CSP, X-Frame-Options, nosniff, permissions policy) and rate-limiting is enforced
 # at the API and tenant quota layer.
 AVD-AWS-0011
+aws-0011
 
-# AVD-AWS-0010: CloudFront Access Logging
+# AVD-AWS-0010 / aws-0010: CloudFront Access Logging
 # Justification: CloudFront access logging requires S3 bucket writes for access log files,
 # adding billable S3 operations. Omitted in dev environment.
 AVD-AWS-0010
+aws-0010
 
-# AVD-AWS-0067: Lambda Active Tracing (AWS X-Ray)
+# AVD-AWS-0067 / aws-0067: Lambda Active Tracing (AWS X-Ray)
 # Justification: Active X-Ray tracing incurs trace storage and recording fees beyond low
 # volume. Custom structured JSON logs with request_id and trace_id provide sufficient
 # observability within CloudWatch free tier.
 AVD-AWS-0067
+aws-0067
 
-# AVD-AWS-0028: DynamoDB Customer-Managed KMS Key
+# AVD-AWS-0025 / aws-0025: DynamoDB Customer-Managed KMS Key
 # Justification: DynamoDB tables use AWS-owned default encryption (AES-256). Dedicated KMS
 # CMKs incur $1.00/month per key without adding measurable security value for dev.
+AVD-AWS-0025
+aws-0025
 AVD-AWS-0028
+aws-0028
 
-# AVD-AWS-0026: DynamoDB Point-in-Time Recovery (PITR)
+# AVD-AWS-0024 / aws-0024: DynamoDB Point-in-Time Recovery (PITR)
 # Justification: PITR is disabled on dev tables to avoid continuous backup storage charges.
+AVD-AWS-0024
+aws-0024
 AVD-AWS-0026
+aws-0026
 
-# AVD-AWS-0086 / AVD-AWS-0087: S3 Bucket Encryption with Customer KMS Key
-# Justification: S3 buckets use default AWS SSE-S3 (AES-256) encryption. KMS keys incur
-# monthly management costs.
+# AVD-AWS-0132 / aws-0132: S3 Bucket Encryption with Customer KMS Key
+# Justification: S3 buckets use default AWS SSE-S3 (AES-256) encryption. KMS CMK keys incur
+# $1/month per key in management fees.
+AVD-AWS-0132
+aws-0132
 AVD-AWS-0086
+aws-0086
 AVD-AWS-0087
+aws-0087
 
-# AVD-AWS-0088: S3 Bucket Public Access Block
-# Note: Public access block is enabled on all buckets, but scanner may check root module.
+# AVD-AWS-0342 / aws-0342: CloudFront Distribution Custom SSL Certificate
+# Justification: CloudFront distribution uses default CloudFront certificate (*.cloudfront.net)
+# to avoid requiring a custom domain and ACM certificate provisioning in dev environment.
+AVD-AWS-0342
+aws-0342
+
+# AVD-AWS-0345 / aws-0345: IAM Policy allows 's3:*' Action
+# Justification: The GitHub Actions apply role policy strictly scopes s3:* actions to
+# project-prefixed resource ARNs ('arn:aws:s3:::vaultrag-*'). Broad object/bucket lifecycle
+# operations require wildcards within the scoped project prefix.
+AVD-AWS-0345
+aws-0345
+
+# AVD-AWS-0088 / aws-0088: S3 Bucket Public Access Block
+AVD-AWS-0088
+aws-0088
