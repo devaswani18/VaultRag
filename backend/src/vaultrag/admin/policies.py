@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 
+from vaultrag.audit.hashchain import append_event
 from vaultrag.auth.dependencies import require_role
 from vaultrag.clients.dynamo import TenantRepo
 from vaultrag.context import RequestContext, Role
@@ -149,4 +150,11 @@ async def update_policies(
         updated_settings.get("settings_version"),
         sorted(cleaned_patch.keys()),
     )
+    # Append cryptographic audit event (security mutation must fail if audit fails)
+    append_event(
+        ctx,
+        action="policy_change",
+        details={"changed_keys": sorted(cleaned_patch.keys())},
+    )
+
     return updated_settings

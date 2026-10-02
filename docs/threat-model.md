@@ -101,3 +101,40 @@ VaultRAG implements a multi-stage prompt injection firewall combining pre-ingest
 > * **Semantic Evasion**: Novel paraphrasing, complex linguistic metaphors, or subtle instructions split across multiple semantic chunks may evade static regex patterns.
 > * **Steganography & Polyglots**: Sophisticated encoding methods not accompanied by standard execution keywords could pass heuristic filters.
 > * **Defense-in-Depth Rationale**: VaultRAG treats heuristic scanning as only the first layer of defense. Structural sandboxing (XML escaping), output link domain matching, random canary monitoring, and strict document-level ACLs work collectively to prevent compromised chunks from causing unauthorized data leakage or privilege escalation even if an injection payload passes initial ingestion heuristics.
+
+---
+
+## Audit Tampering
+
+### 1. Threat Description
+An adversary or malicious tenant insider attempting to conceal unauthorized actions (such as exfiltrating data via queries, modifying security policies, or deleting documents) may attempt to manipulate the audit trail:
+1. **Record Modification**: Editing historical audit log records to disguise actions or actors.
+2. **Record Deletion**: Selectively deleting incriminating log entries to leave an incomplete historical record.
+3. **Log Injection**: Injecting spoofed records into the audit log or embedding malicious spreadsheet formulas (CSV injection) targeting administrators exporting logs.
+4. **Log Truncation & History Rewriting**: Truncating the chain or recomputing alternative hashes to forge a plausible history.
+
+---
+
+### 2. Mitigations & Defensive Architecture
+
+VaultRAG enforces an append-only, cryptographically linked hash chain with HMAC anchor signing and formula neutralization:
+
+| Surface | Defensive Control | Enforcement Point |
+|---|---|---|
+| **Cryptographic Hash Chain** | Every record includes `seq`, `prev_hash`, UTC timestamp, actor, action, resource ID, outcome, and filtered details. The record hash is computed as `SHA-256(prev_hash + canonical_json(record_core))`. Genesis record starts at `seq = 0` with 64 zeros as `prev_hash`. | [`backend/src/vaultrag/audit/hashchain.py`](file:///backend/src/vaultrag/audit/hashchain.py) |
+| **Optimistic Concurrency & Monotonicity** | DynamoDB `PutItem` enforces `attribute_not_exists(seq)`. Concurrent writes or race conditions trigger up to 5 exponential-backoff retries with jitter, preventing forks and ensuring unbroken sequential ordering. | [`backend/src/vaultrag/audit/hashchain.py`](file:///backend/src/vaultrag/audit/hashchain.py) |
+| **Tamper Detection & Verification** | `GET /admin/audit/verify` pages through the complete chain for the tenant. It recomputes each hash and verifies monotonic continuity (`seq == prev + 1`) and linkage (`record.prev_hash == prev.hash`). Editing any stored field or deleting a middle item immediately exposes the exact broken `seq`. | [`backend/src/vaultrag/audit/hashchain.py`](file:///backend/src/vaultrag/audit/hashchain.py), [`backend/src/vaultrag/admin/audit.py`](file:///backend/src/vaultrag/admin/audit.py) |
+| **Cryptographic Anchor Mitigation** | `GET /admin/audit/anchor` exports a signed anchor `{tenant_id, seq, hash, ts, signature}` where `signature` is HMAC-SHA256 computed using SSM secret `cert_hmac_secret`. Anchors can be stored off-system (e.g. cold storage or external ledger) to anchor the chain at specific checkpoints. | [`backend/src/vaultrag/audit/hashchain.py`](file:///backend/src/vaultrag/audit/hashchain.py), [`backend/src/vaultrag/admin/audit.py`](file:///backend/src/vaultrag/admin/audit.py) |
+| **Strict Detail Whitelisting** | Free-text user input is forbidden in audit payloads. Queries record `question_sha256` rather than raw question strings. Allowed detail keys are strictly enforced by `ALLOWED_DETAIL_KEYS` per action. | [`backend/src/vaultrag/audit/hashchain.py`](file:///backend/src/vaultrag/audit/hashchain.py) |
+| **CSV Injection Neutralization** | When exporting audit logs to CSV via `GET /admin/audit/export`, any cell starting with formula trigger characters (`=`, `+`, `-`, `@`, `\t`, `\r`) is prefixed with a single quote (`'`), neutralizing client-side formula execution in Excel/Sheets. | [`backend/src/vaultrag/admin/audit.py`](file:///backend/src/vaultrag/admin/audit.py) |
+| **Fail-Closed Security Mutations** | For security-relevant mutations (ACL changes, policy updates, document deletion), failing to append to the audit table fails the user request. For read queries, audit failures are logged without disrupting query availability. | [`backend/src/vaultrag/api/routers/documents.py`](file:///backend/src/vaultrag/api/routers/documents.py), [`backend/src/vaultrag/admin/policies.py`](file:///backend/src/vaultrag/admin/policies.py) |
+
+---
+
+### 3. Limitations & Residual Risk
+
+> [!WARNING]
+> **Database-Level Rewriting Risk:**
+> While the hash chain detects any modification or deletion within the database, an adversary with full administrative control over the underlying AWS account or DynamoDB table could theoretically drop the table or recreate a forged chain from genesis with a different private HMAC secret.
+>
+> * **Anchor Defense**: Periodically exporting and archiving anchors (`export_anchor`) to an external write-once-read-many (WORM) storage system or external compliance log mitigates this residual risk by creating an immutable external reference of the chain's state at known points in time.

@@ -7,6 +7,7 @@ from typing import Any
 
 from qdrant_client import models
 
+from vaultrag.audit.hashchain import append_event
 from vaultrag.clients.dynamo import DocumentRepo, DocumentStatus, TenantRepo
 from vaultrag.clients.gemini import embed_texts
 from vaultrag.clients.qdrant import upsert_chunks
@@ -194,6 +195,20 @@ def process_record(record: dict[str, Any]) -> None:
                     "quarantine_report": quarantine_report,
                 },
             )
+            try:
+                append_event(
+                    "system:ingest",
+                    action="document_quarantined",
+                    resource_id=doc_id,
+                    outcome="quarantined",
+                    details={
+                        "risk": "high" if drop_ratio > 0.30 else "medium",
+                        "reasons": [f"dropped_{dropped_chunks}_of_{total_chunks}"],
+                    },
+                    tenant_id=tenant_id,
+                )
+            except Exception as audit_err:
+                logger.error("Failed to append document_quarantined audit record: %s", audit_err)
             return
 
         # 9. Embed all remaining active chunks (RETRIEVAL_DOCUMENT) in batches
@@ -245,6 +260,18 @@ def process_record(record: dict[str, Any]) -> None:
                 "quarantine_report": quarantine_report,
             },
         )
+        try:
+            append_event(
+                "system:ingest",
+                action="document_ready",
+                resource_id=doc_id,
+                outcome="ok",
+                details={"chunk_count": len(points)},
+                tenant_id=tenant_id,
+            )
+        except Exception as audit_err:
+            logger.error("Failed to append document_ready audit record: %s", audit_err)
+
         logger.info(
             "Document ingestion completed: tenant_id=%s, doc_id=%s, chunk_count=%d",
             tenant_id,
@@ -283,6 +310,20 @@ def process_record(record: dict[str, Any]) -> None:
                     "quarantine_report": quar_rep,
                 },
             )
+            try:
+                append_event(
+                    "system:ingest",
+                    action="document_quarantined",
+                    resource_id=doc_id,
+                    outcome="quarantined",
+                    details={
+                        "risk": "high",
+                        "reasons": getattr(e, "reasons", ["document_blocked"]),
+                    },
+                    tenant_id=tenant_id,
+                )
+            except Exception as audit_err:
+                logger.error("Failed to append document_quarantined audit record: %s", audit_err)
         except Exception:
             logger.exception(
                 "Failed to update document to QUARANTINED for tenant_id=%s, doc_id=%s",

@@ -47,18 +47,22 @@ resource "aws_iam_role_policy" "lambda_ingest" {
         ]
         Resource = "${aws_cloudwatch_log_group.lambda_ingest.arn}:*"
       },
-      # 2. DynamoDB: Scoped strictly to documents table only (no Scan permission)
+      # 2. DynamoDB: Scoped strictly to documents table and audit table for hashchain appends (NO Scan permission)
       {
-        Sid    = "DynamoDBDocumentsAccess"
+        Sid    = "DynamoDBDocumentsAndAuditAccess"
         Effect = "Allow"
         Action = [
           "dynamodb:GetItem",
           "dynamodb:UpdateItem",
-          "dynamodb:ConditionCheckItem"
+          "dynamodb:ConditionCheckItem",
+          "dynamodb:PutItem",
+          "dynamodb:Query"
         ]
         Resource = [
           aws_dynamodb_table.documents.arn,
-          "${aws_dynamodb_table.documents.arn}/*"
+          "${aws_dynamodb_table.documents.arn}/*",
+          aws_dynamodb_table.audit.arn,
+          "${aws_dynamodb_table.audit.arn}/*"
         ]
       },
       # 3. S3 Documents Bucket: GetObject and HeadObject restricted to uploads/*

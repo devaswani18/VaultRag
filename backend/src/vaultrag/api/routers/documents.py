@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 from qdrant_client import models
 
+from vaultrag.audit.hashchain import append_event
 from vaultrag.auth.dependencies import get_ctx
 from vaultrag.clients import qdrant as qdrant_client
 from vaultrag.clients.dynamo import DocumentRepo, TenantRepo
@@ -139,6 +140,19 @@ async def create_document(
         chunk_count=0,
     )
 
+    # Append cryptographic audit event (security mutation must fail if audit fails)
+    append_event(
+        ctx,
+        action="document_create",
+        resource_id=doc_id,
+        details={
+            "filename": sanitized_filename,
+            "content_type": base_ct,
+            "size_bytes": req.size_bytes,
+            "visibility": visibility,
+        },
+    )
+
     # 8. Generate presigned S3 POST data
     presigned = create_presigned_post(
         key=s3_key,
@@ -206,6 +220,34 @@ async def get_document(
         "allowed_users": doc.get("allowed_users", []),
         "owner_user_id": doc.get("owner_user_id", ""),
     }
+
+
+@router.delete("/{doc_id}")
+async def delete_document(
+    doc_id: str,
+    ctx: RequestContext = Depends(get_ctx),  # noqa: B008
+) -> dict[str, Any]:
+    """Delete document (allowed for document owner or tenant admin)."""
+    repo = DocumentRepo()
+    doc = repo.get(ctx.tenant_id, doc_id)
+
+    if not can_view(ctx, doc):
+        raise NotFound(f"Document '{doc_id}' not found")
+
+    if not (ctx.is_admin or doc.get("owner_user_id") == ctx.user_id):
+        raise Forbidden("Only document owner or tenant admin can delete document")
+
+    repo.delete(ctx.tenant_id, doc_id)
+
+    # Append cryptographic audit event (security mutation must fail if audit fails)
+    append_event(
+        ctx,
+        action="document_delete",
+        resource_id=doc_id,
+        details={"deleted": True},
+    )
+
+    return {"status": "deleted", "doc_id": doc_id}
 
 
 @router.patch("/{doc_id}/acl")
@@ -283,6 +325,18 @@ async def update_document_acl(
 
     # 6. Bump tenant "kb_version" (integer attribute, atomic ADD)
     tenant_repo.bump_kb_version(ctx.tenant_id)
+
+    # 7. Append cryptographic audit event (security mutation must fail if audit fails)
+    append_event(
+        ctx,
+        action="acl_change",
+        resource_id=doc_id,
+        details={
+            "visibility": visibility,
+            "allowed_roles": allowed_roles,
+            "allowed_users": allowed_users,
+        },
+    )
 
     return {
         "id": doc_id,
