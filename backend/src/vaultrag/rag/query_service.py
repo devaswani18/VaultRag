@@ -4,12 +4,16 @@ and Trust Layer guards.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import time
 from typing import Any
 
+from vaultrag.audit.hashchain import append_event
+from vaultrag.audit.usage import increment, reserve_query
 from vaultrag.clients.dynamo import TenantRepo
 from vaultrag.context import RequestContext
-from vaultrag.errors import ValidationFailed
+from vaultrag.errors import QuotaExceeded, ValidationFailed
 from vaultrag.rag.faithfulness import check as check_faithfulness
 from vaultrag.rag.generate import answer as generate_answer
 from vaultrag.rag.output_guard import check_output
@@ -84,6 +88,72 @@ def _format_sources(
     return sources
 
 
+def _finish_and_audit(
+    ctx: RequestContext,
+    question: str,
+    response_dict: dict[str, Any],
+    start_time: float,
+    q_res: Any = None,
+    chunks: list[RetrievedChunk] | None = None,
+) -> dict[str, Any]:
+    """Record query audit event and increment usage counters without failing read requests."""
+    duration_ms = round((time.monotonic() - start_time) * 1000, 2)
+    q_hash = hashlib.sha256(question.encode("utf-8")).hexdigest()
+
+    sources = response_dict.get("sources", [])
+    doc_ids = sorted({s["doc_id"] for s in sources if isinstance(s, dict) and "doc_id" in s})
+    is_abstained = bool(response_dict.get("trust", {}).get("abstained", False))
+    reasons = response_dict.get("trust", {}).get("reasons", [])
+
+    pii_types_in_q: list[str] = []
+    if q_res is not None and hasattr(q_res, "findings"):
+        pii_types_in_q = sorted({f.category for f in q_res.findings})
+    elif q_res is not None and hasattr(q_res, "findings_summary"):
+        pii_types_in_q = sorted(q_res.findings_summary.keys())
+
+    audit_details: dict[str, Any] = {
+        "question_sha256": q_hash,
+        "trust_score": response_dict.get("trust", {}).get("score", 0.0),
+        "abstained": is_abstained,
+        "cached": False,
+        "n_sources": len(sources),
+        "doc_ids": doc_ids,
+        "pii_types_in_question": pii_types_in_q,
+        "pii_in_answer": bool(response_dict.get("pii_in_answer", False)),
+        "latency_ms": duration_ms,
+    }
+    if is_abstained and reasons:
+        audit_details["reason"] = str(reasons[0])
+
+    action = "query_abstain" if is_abstained else "query"
+
+    try:
+        append_event(
+            ctx,
+            action=action,
+            outcome="ok",
+            details=audit_details,
+        )
+    except Exception as e:
+        logger.error("Failed to append query audit event: %s", e)
+
+    # Meter usage (queries already reserved by reserve_query)
+    try:
+        est_tokens = (len(question) + len(str(response_dict.get("answer", "")))) // 4
+        increment(
+            ctx,
+            queries=0,
+            chunks=len(chunks or []),
+            est_tokens=est_tokens,
+            cache_hits=0,
+            cache_misses=1,
+        )
+    except Exception as e:
+        logger.error("Failed to increment query usage: %s", e)
+
+    return response_dict
+
+
 def execute_query(
     ctx: RequestContext,
     question: str,
@@ -94,6 +164,7 @@ def execute_query(
     tenant_repo_cls: Any = None,
 ) -> dict[str, Any]:
     """Execute end-to-end RAG query workflow with retrieval gating and faithfulness scoring."""
+    start_time = time.monotonic()
     _retrieve = retrieve_fn or retrieve
     _generate = generate_fn or generate_answer
     _repo_cls = tenant_repo_cls or TenantRepo
@@ -109,6 +180,15 @@ def execute_query(
     pii_mode = str(settings.get("pii_mode", "redact")).strip().lower()
     min_retrieval_score = float(settings.get("min_retrieval_score", 0.35))
     min_faithfulness = float(settings.get("min_faithfulness", 0.6))
+    daily_query_quota = int(settings.get("daily_query_quota", 200))
+
+    # Atomic quota reservation before retrieval/generation
+    try:
+        reserve_query(ctx, daily_query_quota)
+    except QuotaExceeded:
+        raise
+    except Exception as e:
+        logger.warning("Could not reserve query quota in store: %s", e)
 
     # 1. Prompt injection detection on question (do NOT refuse; record injection_attempt)
     inj_result = scan_text(question)
@@ -120,6 +200,15 @@ def execute_query(
             ctx.user_id,
             inj_result.reasons,
         )
+        try:
+            append_event(
+                ctx,
+                action="injection_attempt",
+                outcome="flagged",
+                details={"risk": inj_result.risk, "reasons": inj_result.reasons},
+            )
+        except Exception as audit_err:
+            logger.error("Failed to append injection_attempt audit record: %s", audit_err)
 
     # 2. Run PII guard on question BEFORE embedding or sending to LLM
     q_res = apply_policy(question, mode=pii_mode)
@@ -141,7 +230,7 @@ def execute_query(
             best_score,
             min_retrieval_score,
         )
-        return {
+        resp = {
             "answer": _ABSTAIN_ANSWER,
             "trust": {
                 "score": 0.0,
@@ -155,6 +244,7 @@ def execute_query(
             "pii_in_answer": False,
             "injection_attempt": injection_attempt,
         }
+        return _finish_and_audit(ctx, question, resp, start_time, q_res, chunks)
 
     # 5. Generate structured answer with canary and XML sandboxing
     result = _generate(clean_question, chunks)
@@ -167,7 +257,7 @@ def execute_query(
             ctx.user_id,
             getattr(result, "invalid_reason", "model_output_invalid"),
         )
-        return {
+        resp = {
             "answer": _ABSTAIN_ANSWER,
             "trust": {
                 "score": 0.0,
@@ -181,12 +271,13 @@ def execute_query(
             "pii_in_answer": False,
             "injection_attempt": injection_attempt,
         }
+        return _finish_and_audit(ctx, question, resp, start_time, q_res, chunks)
 
     # 6. Output guard verification (canary leak, untrusted URLs, system prompt leak)
     out_check = check_output(answer=result.answer, chunks=chunks, canary=result.canary)
     if not out_check.ok:
         logger.warning("Output guard blocked answer: reasons=%s", out_check.reasons)
-        return {
+        resp = {
             "answer": out_check.safe_answer,
             "trust": {
                 "score": 0.0,
@@ -200,6 +291,7 @@ def execute_query(
             "pii_in_answer": False,
             "injection_attempt": injection_attempt,
         }
+        return _finish_and_audit(ctx, question, resp, start_time, q_res, chunks)
 
     # 7. Check factual faithfulness of answer segments against source chunks
     faith_res = check_faithfulness(result.segments, chunks, tenant_settings=settings)
@@ -224,7 +316,7 @@ def execute_query(
                 faith_res.score,
                 min_faithfulness,
             )
-            return {
+            resp = {
                 "answer": _ABSTAIN_ANSWER,
                 "trust": {
                     "score": round(faith_res.score, 4),
@@ -238,6 +330,7 @@ def execute_query(
                 "pii_in_answer": False,
                 "injection_attempt": injection_attempt,
             }
+            return _finish_and_audit(ctx, question, resp, start_time, q_res, chunks)
 
         reduced_text = " ".join(str(s.get("text", "")).strip() for s in supported_segments)
         final_answer = (
@@ -257,7 +350,7 @@ def execute_query(
     cited_ids = set(result.citations)
     sources = _format_sources(chunks, cited_ids, pii_mode)
 
-    return {
+    resp = {
         "answer": masked_answer,
         "trust": {
             "score": round(faith_res.score, 4),
@@ -271,3 +364,4 @@ def execute_query(
         "pii_in_answer": pii_in_answer,
         "injection_attempt": injection_attempt,
     }
+    return _finish_and_audit(ctx, question, resp, start_time, q_res, chunks)
