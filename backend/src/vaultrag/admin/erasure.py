@@ -37,14 +37,20 @@ def _get_cert_hmac_secret() -> str:
         return os.environ.get("VAULTRAG_SECRET_CERT_HMAC_SECRET", "dev-insecure-hmac-secret-12345")
 
 
-def invalidate_doc_cache(tenant_id: str, doc_id: str) -> int:
-    """Purge cached query answers referencing doc_id.
+def invalidate_doc_cache(
+    tenant_id: str,
+    doc_id: str,
+    *,
+    qdrant_client: Any = None,
+) -> int:
+    """Purge cached query answers referencing doc_id."""
+    from vaultrag.rag.semantic_cache import delete_for_doc
 
-    TODO (Stage 17): Integrate with semantic query cache layer once implemented.
-    Returns the count of purged cache entries (currently 0 stub).
-    """
-    _ = (tenant_id, doc_id)
-    return 0
+    try:
+        return delete_for_doc(tenant_id, doc_id, qdrant_client=qdrant_client)
+    except Exception as e:
+        logger.warning("Failed to invalidate cache for doc_id=%s: %s", doc_id, e)
+        return 0
 
 
 def erase_document(
@@ -167,8 +173,8 @@ def erase_document(
                 batch = keys_to_delete[i : i + 1000]
                 s3.delete_objects(Bucket=bucket, Delete={"Objects": batch})
 
-        # Step e: Cache invalidation (Stage 17 stub)
-        deleted_cache_entries = invalidate_doc_cache(ctx.tenant_id, doc_id)
+        # Step e: Cache invalidation
+        deleted_cache_entries = invalidate_doc_cache(ctx.tenant_id, doc_id, qdrant_client=qdrant)
 
         # Step f: Post-checks
         try:
