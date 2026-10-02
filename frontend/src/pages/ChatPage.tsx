@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   ShieldAlert,
   AlertTriangle,
+  HelpCircle,
 } from 'lucide-react'
 
 interface ChatMessage {
@@ -17,6 +18,8 @@ interface ChatMessage {
   text: string
   sources?: QuerySource[]
   trust?: QueryTrust
+  pii_in_answer?: boolean
+  injection_attempt?: boolean
 }
 
 export const ChatPage: React.FC = () => {
@@ -62,6 +65,8 @@ export const ChatPage: React.FC = () => {
           text: resp.answer,
           sources: resp.sources,
           trust: resp.trust,
+          pii_in_answer: resp.pii_in_answer,
+          injection_attempt: resp.injection_attempt,
         },
       ])
     } catch (err: any) {
@@ -224,6 +229,79 @@ export const ChatPage: React.FC = () => {
                     Note: Some unverified statements were removed from this response.
                   </span>
                 </div>
+              )}
+
+              {/* "Why this answer?" Panel */}
+              {msg.sender === 'assistant' && (msg.sources || msg.trust) && (
+                <details className="why-this-answer-panel" data-testid="why-this-answer-panel">
+                  <summary className="why-this-answer-trigger" data-testid="why-this-answer-trigger">
+                    <HelpCircle size={13} />
+                    <span>Why this answer?</span>
+                    {msg.trust && (
+                      <span className="why-trust-score-pill">
+                        Trust: {(msg.trust.score * 100).toFixed(0)}%
+                      </span>
+                    )}
+                  </summary>
+
+                  <div className="why-this-answer-content" data-testid="why-this-answer-content">
+                    {/* Policy Notes */}
+                    <div className="why-policy-notes" data-testid="why-policy-notes">
+                      <div className="why-section-label">Policy & Trust Breakdown:</div>
+                      <ul className="why-notes-list">
+                        <li>
+                          <strong>Faithfulness score:</strong> {(Number(msg.trust?.score || 0) * 100).toFixed(0)}%
+                          {msg.trust?.grounded ? ' (Fully grounded in source documents)' : ' (Under strict verification)'}
+                        </li>
+                        {msg.pii_in_answer && (
+                          <li className="why-note-warning" data-testid="why-note-pii">
+                            Sensitive data (PII) findings detected and redacted in accordance with tenant privacy policy.
+                          </li>
+                        )}
+                        {msg.trust?.partial && (
+                          <li className="why-note-warning" data-testid="why-note-partial">
+                            Some unverified statements were removed to preserve ground truth.
+                          </li>
+                        )}
+                        {msg.trust?.abstained && (
+                          <li className="why-note-danger" data-testid="why-note-abstained">
+                            Model safely abstained due to insufficient context or faithfulness below threshold.
+                          </li>
+                        )}
+                        {msg.injection_attempt && (
+                          <li className="why-note-danger" data-testid="why-note-injection">
+                            Security scan detected and neutralized a potential prompt injection attempt.
+                          </li>
+                        )}
+                      </ul>
+                    </div>
+
+                    {/* Sources with Trust Score */}
+                    {msg.sources && msg.sources.length > 0 && (
+                      <div className="why-sources-section">
+                        <div className="why-section-label">Sources Used ({msg.sources.length}):</div>
+                        <div className="why-sources-list">
+                          {msg.sources.map((src, sIdx) => (
+                            <div key={`${src.chunk_id}-${sIdx}`} className="why-source-card" data-testid="why-source-item">
+                              <div className="why-source-header">
+                                <span className="why-source-filename">
+                                  <FileText size={12} style={{ display: 'inline', marginRight: 4 }} />
+                                  {src.filename} {src.page !== null ? `(Page ${src.page})` : ''}
+                                </span>
+                                <span className="why-source-score">
+                                  Score: {src.score.toFixed(3)}
+                                </span>
+                              </div>
+                              <div className="why-source-snippet">
+                                "{src.snippet}"
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </details>
               )}
 
               {/* Source chips row */}

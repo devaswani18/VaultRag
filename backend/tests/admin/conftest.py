@@ -109,6 +109,20 @@ def mock_admin_env(aws_env: None) -> Generator[dict[str, Any], None, None]:
             }
         )
 
+        # 3b. Usage table
+        dynamodb.create_table(
+            TableName="vaultrag-dev-usage",
+            KeySchema=[
+                {"AttributeName": "tenant_id", "KeyType": "HASH"},
+                {"AttributeName": "day", "KeyType": "RANGE"},
+            ],
+            AttributeDefinitions=[
+                {"AttributeName": "tenant_id", "AttributeType": "S"},
+                {"AttributeName": "day", "AttributeType": "S"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
+
         # 4. S3 Bucket
         s3.create_bucket(
             Bucket="vaultrag-docs-dev",

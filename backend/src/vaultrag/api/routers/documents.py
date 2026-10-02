@@ -186,8 +186,16 @@ async def list_documents(
             "filename": d.get("filename", ""),
             "status": d.get("status", ""),
             "size": d.get("size_bytes", 0),
+            "size_bytes": d.get("size_bytes", 0),
             "created_at": d.get("created_at", ""),
             "chunk_count": d.get("chunk_count", 0),
+            "visibility": d.get("visibility", "tenant"),
+            "allowed_roles": d.get("allowed_roles", []),
+            "allowed_users": d.get("allowed_users", []),
+            "owner_user_id": d.get("owner_user_id", ""),
+            "pii_summary": d.get("pii_summary", {}),
+            "injection_summary": d.get("injection_summary", {}),
+            "quarantine_report": d.get("quarantine_report", []),
         }
         for d in items
         if can_view(ctx, d)

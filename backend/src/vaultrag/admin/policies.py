@@ -29,6 +29,7 @@ ALLOWED_SETTINGS_KEYS = frozenset(
         "daily_query_quota",
         "cache_enabled",
         "retain_original_files",
+        "llm_judge_enabled",
     }
 )
 
@@ -115,6 +116,13 @@ def _validate_patch_payload(body: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(val, bool):
             raise ValidationFailed("retain_original_files must be a boolean")
         cleaned["retain_original_files"] = val
+
+    # 8. llm_judge_enabled
+    if "llm_judge_enabled" in body:
+        val = body["llm_judge_enabled"]
+        if not isinstance(val, bool):
+            raise ValidationFailed("llm_judge_enabled must be a boolean")
+        cleaned["llm_judge_enabled"] = val
 
     return cleaned
 

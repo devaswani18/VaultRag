@@ -1,8 +1,8 @@
 import React from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
-import { AuthProvider, ProtectedRoute } from './auth'
+import { AuthProvider, ProtectedRoute, AdminRoute } from './auth'
 import { Layout } from './components/Layout'
-import { ChatPage, DocumentsPage, LoginPage } from './pages'
+import { ChatPage, DocumentsPage, LoginPage, AdminTrustCenterPage } from './pages'
 
 export const App: React.FC = () => {
   return (
@@ -23,6 +23,14 @@ export const App: React.FC = () => {
             <Route index element={<Navigate to="/chat" replace />} />
             <Route path="chat" element={<ChatPage />} />
             <Route path="documents" element={<DocumentsPage />} />
+            <Route
+              path="admin"
+              element={
+                <AdminRoute>
+                  <AdminTrustCenterPage />
+                </AdminRoute>
+              }
+            />
           </Route>
 
           {/* Catch-all */}

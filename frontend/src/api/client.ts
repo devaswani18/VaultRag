@@ -26,6 +26,7 @@ export type DocumentVisibility = 'tenant' | 'roles' | 'private'
 
 export interface DocumentRecord {
   id: string
+  doc_id?: string
   filename: string
   status: DocumentStatus
   size_bytes: number
@@ -34,6 +35,16 @@ export interface DocumentRecord {
   content_type?: string
   visibility?: DocumentVisibility
   allowed_roles?: string[]
+  allowed_users?: string[]
+  owner_user_id?: string
+  pii_summary?: Record<string, number>
+  injection_summary?: Record<string, number>
+  quarantine_report?: Array<{
+    chunk_index: number
+    page: number | null
+    risk: string
+    reasons: string[]
+  }>
 }
 
 export interface CreateDocumentRequest {
@@ -326,5 +337,205 @@ export function uploadToPresigned(
 
     xhr.timeout = 120000 // 2 minutes for upload
     xhr.send(formData)
+  })
+}
+
+// ============================================================================
+// Trust Center & Administration API Methods
+// ============================================================================
+
+export interface OverviewSummary {
+  tenant_id: string
+  queries_today: number
+  daily_query_quota: number
+  abstain_rate: number
+  avg_trust_score: number
+  cache_hit_rate: number
+  quarantined_documents_count: number
+  pii_findings_by_type: Record<string, number>
+  audit_chain_status: {
+    valid: boolean
+    checked: number
+    broken_at_seq: number | null
+    timestamp: string
+  }
+}
+
+export interface AuditRecord {
+  seq: number
+  ts: string
+  actor: string
+  action: string
+  resource_id?: string
+  outcome: string
+  hash: string
+  prev_hash: string
+  details?: Record<string, any>
+}
+
+export interface AuditListResponse {
+  items: AuditRecord[]
+  next_cursor: string | null
+}
+
+export interface AuditVerifyResponse {
+  valid: boolean
+  checked: number
+  broken_at_seq: number | null
+}
+
+export interface AuditAnchorResponse {
+  tenant_id: string
+  latest_seq: number
+  hash: string
+  signature: string
+  exported_at: string
+}
+
+export interface KnowledgeGapCluster {
+  representative_preview: string
+  count: number
+  first_seen: string
+  last_seen: string
+  reasons: string[]
+}
+
+export interface TenantPolicies {
+  pii_mode: 'off' | 'flag' | 'redact' | 'block'
+  injection_policy: 'off' | 'flag_only' | 'quarantine_high'
+  min_retrieval_score: number
+  min_faithfulness: number
+  daily_query_quota: number
+  cache_enabled: boolean
+  retain_original_files: boolean
+  llm_judge_enabled: boolean
+  settings_version?: number
+}
+
+export interface QuarantinedDocument {
+  doc_id: string
+  filename: string
+  status: string
+  created_at: string
+  chunk_count: number
+  error?: string | null
+  injection_summary?: Record<string, number>
+  quarantine_report?: Array<{
+    chunk_index: number
+    page: number | null
+    risk: string
+    reasons: string[]
+  }>
+}
+
+export interface UsageDayRecord {
+  tenant_id: string
+  day: string
+  queries: number
+  cache_hits: number
+  cache_misses: number
+  chunks?: number
+  est_tokens?: number
+}
+
+export interface UsageResponse {
+  tenant_id: string
+  days: number
+  usage: UsageDayRecord[]
+}
+
+export interface PatchDocumentAclRequest {
+  visibility: DocumentVisibility
+  allowed_roles?: string[]
+  allowed_users?: string[]
+}
+
+export interface CertificateVerifyResult {
+  valid: boolean
+  reason?: string | null
+}
+
+export async function getAdminOverview(): Promise<OverviewSummary> {
+  return apiRequest<OverviewSummary>('/admin/overview')
+}
+
+export async function getAuditLogs(
+  limit: number = 50,
+  cursor?: string | null,
+  action?: string,
+  actor?: string
+): Promise<AuditListResponse> {
+  const params = new URLSearchParams()
+  params.set('limit', String(limit))
+  if (cursor) params.set('cursor', cursor)
+  if (action) params.set('action', action)
+  if (actor) params.set('actor', actor)
+
+  return apiRequest<AuditListResponse>(`/admin/audit?${params.toString()}`)
+}
+
+export async function verifyAuditChain(): Promise<AuditVerifyResponse> {
+  return apiRequest<AuditVerifyResponse>('/admin/audit/verify')
+}
+
+export async function getAuditAnchor(): Promise<AuditAnchorResponse> {
+  return apiRequest<AuditAnchorResponse>('/admin/audit/anchor')
+}
+
+export async function exportAuditCsv(): Promise<string> {
+  const baseUrl = getApiBaseUrl()
+  const token = await globalTokenGetter()
+  const res = await fetch(`${baseUrl}/admin/audit/export`, {
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  })
+  if (!res.ok) {
+    throw new ApiError(res.status, 'EXPORT_FAILED', 'Failed to export audit CSV')
+  }
+  return res.text()
+}
+
+export async function getKnowledgeGaps(days: number = 30): Promise<KnowledgeGapCluster[]> {
+  return apiRequest<KnowledgeGapCluster[]>(`/admin/gaps?days=${days}`)
+}
+
+export async function getPolicies(): Promise<TenantPolicies> {
+  return apiRequest<TenantPolicies>('/admin/policies')
+}
+
+export async function updatePolicies(
+  patch: Partial<TenantPolicies>
+): Promise<TenantPolicies> {
+  return apiRequest<TenantPolicies>('/admin/policies', {
+    method: 'PATCH',
+    body: patch,
+  })
+}
+
+export async function getQuarantine(): Promise<QuarantinedDocument[]> {
+  return apiRequest<QuarantinedDocument[]>('/admin/quarantine')
+}
+
+export async function getUsage(days: number = 30): Promise<UsageResponse> {
+  return apiRequest<UsageResponse>(`/admin/usage?days=${days}`)
+}
+
+export async function verifyCertificate(
+  cert: any
+): Promise<CertificateVerifyResult> {
+  return apiRequest<CertificateVerifyResult>('/admin/certificates/verify', {
+    method: 'POST',
+    body: cert,
+  })
+}
+
+export async function patchDocumentAcl(
+  docId: string,
+  acl: PatchDocumentAclRequest
+): Promise<DocumentRecord> {
+  return apiRequest<DocumentRecord>(`/documents/${encodeURIComponent(docId)}/acl`, {
+    method: 'PATCH',
+    body: acl,
   })
 }
