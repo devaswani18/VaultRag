@@ -75,3 +75,33 @@ To prevent these data leaks while still saving LLM inference latency and costs, 
    During Stage 16 verifiable erasure (`erase_document`), the orchestrator invokes `delete_for_doc(tenant_id, doc_id)`, purging every cached vector referencing the erased document before issuing the Certificate of Erasure.
 5. **No Storage of Unanswered or Partial Queries**:
    Queries that abstain or return partial answers are never cached, preventing negative results from suppressing newly added knowledge.
+
+---
+
+## Cost Model & Cloud Resource Economics
+
+VaultRAG is engineered with a strict **zero-cost idle base**, running entirely within the AWS Free Tier and developer-friendly third-party quotas during initial deployment, testing, and small-team operations.
+
+> **Important**: AWS pricing, allowances, and Free Tier terms evolve over time. Readers and deployers should always verify the latest current terms at the [AWS Free Tier Pricing Page](https://aws.amazon.com/free/) before deployment.
+
+### Service-by-Service Breakdown
+
+| AWS Service | Provisioned Configuration | Free-Tier Allowance / Cost Note | Idle Monthly Cost |
+| :--- | :--- | :--- | :--- |
+| **AWS Lambda** | 2 Functions (`api` @ 512 MB, `ingest` @ 1024 MB), ARM64 architecture | **1,000,000 free requests/month** and **3,200,000 seconds of compute time** (up to 400,000 GB-seconds) every month. Zero cold cost when idle. | **$0.00** |
+| **Amazon S3** | 4 Buckets (`docs`, `artifacts`, `web`, `tfstate`), SSE-S3 AES-256 | **5 GB Standard Storage**, 20,000 GET requests, and 2,000 PUT requests/month under the 12-month free tier. Object lifecycle rules purge old builds after 30 days and temp uploads after 1 day. | **$0.00** |
+| **Amazon DynamoDB** | 5 Tables (`tenants`, `documents`, `audit`, `usage`, `gaps`) in `PAY_PER_REQUEST` on-demand mode | **25 GB of storage** free indefinitely. On-demand billing charges strictly per read/write request unit ($0.00 when idle). | **$0.00** |
+| **Amazon CloudFront** | 1 Distribution (OAC, PriceClass_100, custom ResponseHeadersPolicy) | **1 TB Data Transfer Out** per month and **10,000,000 HTTP/HTTPS requests** free indefinitely. | **$0.00** |
+| **Amazon Cognito** | 1 User Pool + 1 App Client (Email/password SRP authentication) | **50,000 Monthly Active Users (MAUs)** free indefinitely without advanced security features. | **$0.00** |
+| **Amazon CloudWatch** | 2 Log Groups (`/aws/lambda/vaultrag-dev-*`), 7-day retention limit | **5 GB log ingestion** and **5 GB archive storage** free per month. 7-day TTL guarantees dev logs stay well below quota. | **$0.00** |
+| **AWS Systems Manager (SSM)** | Standard SecureString parameters (`/vaultrag/dev/*`) | Standard parameter store storage and throughput are **free of charge**. | **$0.00** |
+| **AWS Budgets** | 1 Zero-Cost Budget with SNS email notifications | First 2 action-enabled budgets are free; standard budget monitoring is **$0.00**. | **$0.00** |
+
+### Deliberately Excluded Paid Infrastructure
+
+To prevent unexpected monthly bills, the following traditional enterprise cloud components are intentionally **excluded** from the architecture:
+
+1. **No NAT Gateways**: Replaced by direct TLS egress from public Lambda runtimes. Avoids ~$32.40/month per availability zone plus data-transfer fees.
+2. **No Elastic Load Balancers (ALB/NLB)**: Replaced by Lambda Function URLs with CORS and CloudFront CDN integration. Avoids ~$16.20/month base cost.
+3. **No Managed Relational Database (RDS/Aurora)**: Replaced by serverless DynamoDB on-demand tables and Qdrant Cloud Free Tier (1 GB cluster). Avoids ~$15–$50+/month.
+4. **No AWS WAF**: Replaced by native CloudFront Response Headers Policies (HSTS, CSP, X-Frame-Options) combined with application-layer tenant query quotas and token rate limits. Avoids ~$5.00/month per WebACL and $1.00/month per managed rule.
