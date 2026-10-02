@@ -1,9 +1,29 @@
+import threading
 from collections.abc import Generator
 from typing import Any
 
 import boto3
 import pytest
 from moto import mock_aws
+
+_moto_dynamo_lock = threading.Lock()
+
+
+def _wrap_table_threadsafe(table: Any) -> Any:
+    """Wrap boto3 Table methods with a threading lock to prevent moto concurrency races."""
+    for m_name in ("put_item", "update_item", "get_item", "delete_item", "query", "scan"):
+        if hasattr(table, m_name):
+            orig_m = getattr(table, m_name)
+
+            def _make_wrapped(m: Any) -> Any:
+                def _locked(*args: Any, **kwargs: Any) -> Any:
+                    with _moto_dynamo_lock:
+                        return m(*args, **kwargs)
+
+                return _locked
+
+            setattr(table, m_name, _make_wrapped(orig_m))
+    return table
 
 
 @pytest.fixture
@@ -23,6 +43,13 @@ def aws_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def mock_audit_dynamo(aws_env: None) -> Generator[dict[str, Any], None, None]:
     with mock_aws():
         dynamodb = boto3.resource("dynamodb", region_name="ap-south-1")
+        orig_Table = dynamodb.Table
+
+        def _locked_Table(name: str) -> Any:
+            tbl = orig_Table(name)
+            return _wrap_table_threadsafe(tbl)
+
+        dynamodb.Table = _locked_Table
 
         # 1. Audit table (PK: tenant_id S, SK: seq N)
         audit_table = dynamodb.create_table(
@@ -92,6 +119,11 @@ def mock_audit_dynamo(aws_env: None) -> Generator[dict[str, Any], None, None]:
                 }
             )
         )
+
+        audit_table = _wrap_table_threadsafe(audit_table)
+        usage_table = _wrap_table_threadsafe(usage_table)
+        tenants_table = _wrap_table_threadsafe(tenants_table)
+        documents_table = _wrap_table_threadsafe(documents_table)
 
         yield {
             "resource": dynamodb,
