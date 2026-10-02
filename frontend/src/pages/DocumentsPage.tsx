@@ -2,11 +2,24 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   DocumentRecord,
   DocumentVisibility,
+  ErasureCertificate,
   createDocument,
+  deleteDocument,
   listDocuments,
   uploadToPresigned,
 } from '../api/client'
-import { Upload, FileText, CheckCircle2, Clock, AlertTriangle, XCircle, ShieldAlert } from 'lucide-react'
+import {
+  Upload,
+  FileText,
+  CheckCircle2,
+  Clock,
+  AlertTriangle,
+  XCircle,
+  ShieldAlert,
+  Trash2,
+  Download,
+  ShieldCheck,
+} from 'lucide-react'
 
 const ALLOWED_EXTENSIONS = ['pdf', 'docx', 'txt', 'md']
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024 // 10 MB limit
@@ -32,6 +45,12 @@ export const DocumentsPage: React.FC = () => {
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploadProgress, setUploadProgress] = useState<number | null>(null)
   const [isUploading, setIsUploading] = useState<boolean>(false)
+
+  // Deletion & Certificate State
+  const [deletingDoc, setDeletingDoc] = useState<DocumentRecord | null>(null)
+  const [isDeleting, setIsDeleting] = useState<boolean>(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [activeCertificate, setActiveCertificate] = useState<ErasureCertificate | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const isMountedRef = useRef<boolean>(true)
@@ -239,6 +258,34 @@ export const DocumentsPage: React.FC = () => {
     }
   }
 
+  const handleDownloadCertificate = (cert: ErasureCertificate) => {
+    const blob = new Blob([JSON.stringify(cert, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `certificate-${cert.doc_id}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  const handleConfirmDelete = async () => {
+    if (!deletingDoc) return
+    setIsDeleting(true)
+    setDeleteError(null)
+    try {
+      const cert = await deleteDocument(deletingDoc.id)
+      setActiveCertificate(cert)
+      setDeletingDoc(null)
+      await loadDocuments()
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Failed to erase document')
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
   return (
     <div className="documents-page">
       <div className="page-title-row">
@@ -394,12 +441,13 @@ export const DocumentsPage: React.FC = () => {
               <th>Size</th>
               <th>Chunks</th>
               <th>Created At</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {documents.length === 0 ? (
               <tr>
-                <td colSpan={5} className="empty-state" data-testid="empty-docs-message">
+                <td colSpan={6} className="empty-state" data-testid="empty-docs-message">
                   {isLoadingDocs ? 'Loading documents...' : 'No documents ingested yet.'}
                 </td>
               </tr>
@@ -418,12 +466,126 @@ export const DocumentsPage: React.FC = () => {
                   <td style={{ color: 'var(--text-muted)' }}>
                     {new Date(doc.created_at).toLocaleString()}
                   </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="btn-danger-outline"
+                      style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                      onClick={() => setDeletingDoc(doc)}
+                      data-testid={`btn-delete-${doc.id}`}
+                      title="Verifiably erase document"
+                    >
+                      <Trash2 size={14} />
+                      <span>Erase</span>
+                    </button>
+                  </td>
                 </tr>
               ))
             )}
           </tbody>
         </table>
       </section>
+
+      {/* Confirmation Dialog Modal */}
+      {deletingDoc && (
+        <div className="modal-backdrop" data-testid="delete-confirm-modal">
+          <div className="modal-card" style={{ maxWidth: 480 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem', color: 'var(--danger)' }}>
+              <AlertTriangle size={24} />
+              <h3 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 600 }}>Confirm Verifiable Erasure</h3>
+            </div>
+            <p style={{ color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: '1rem' }}>
+              Are you sure you want to permanently erase <strong>{deletingDoc.filename}</strong>?
+            </p>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '1.5rem' }}>
+              This will irreversibly purge all vectors from Qdrant, source files from S3, semantic cache entries, and replace document metadata with an immutable tombstone. A signed cryptographic Certificate of Erasure will be generated.
+            </p>
+            {deleteError && (
+              <div className="error-alert" style={{ marginBottom: '1rem' }} data-testid="delete-error-message">
+                <AlertTriangle size={16} />
+                <span>{deleteError}</span>
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => { setDeletingDoc(null); setDeleteError(null); }}
+                disabled={isDeleting}
+                data-testid="btn-cancel-delete"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-danger"
+                onClick={handleConfirmDelete}
+                disabled={isDeleting}
+                data-testid="btn-confirm-delete"
+              >
+                {isDeleting ? (
+                  <>
+                    <span className="spinner" />
+                    <span>Erasing...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 size={16} />
+                    <span>Erase Document</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Certificate of Erasure Modal */}
+      {activeCertificate && (
+        <div className="modal-backdrop" data-testid="certificate-modal">
+          <div className="modal-card" style={{ maxWidth: 540 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem', color: 'var(--success)' }}>
+              <ShieldCheck size={28} />
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 600 }}>Certificate of Erasure</h3>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Cryptographically verified & signed</span>
+              </div>
+            </div>
+
+            <div style={{ background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 8, fontSize: '0.85rem', fontFamily: 'monospace', marginBottom: '1.25rem' }}>
+              <div><strong>Doc ID:</strong> {activeCertificate.doc_id}</div>
+              <div><strong>Tenant:</strong> {activeCertificate.tenant_id}</div>
+              <div><strong>Requested By:</strong> {activeCertificate.requested_by}</div>
+              <div><strong>Vectors Erased:</strong> {activeCertificate.deleted?.vectors ?? 0}</div>
+              <div><strong>Files Erased:</strong> {activeCertificate.deleted?.files ?? 0}</div>
+              <div><strong>Audit Sequence:</strong> #{activeCertificate.audit_seq}</div>
+              <div style={{ wordBreak: 'break-all', marginTop: '0.5rem', color: 'var(--text-muted)' }}>
+                <strong>Signature:</strong> {activeCertificate.signature}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setActiveCertificate(null)}
+                data-testid="btn-close-certificate"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => handleDownloadCertificate(activeCertificate)}
+                data-testid="btn-download-certificate"
+              >
+                <Download size={16} />
+                <span>Download Certificate</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

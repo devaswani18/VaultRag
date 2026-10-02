@@ -35,6 +35,11 @@ def can_view(ctx: RequestContext, doc_or_payload: dict[str, Any]) -> bool:
     if not doc_tenant or doc_tenant != ctx.tenant_id:
         return False
 
+    # Documents in DELETING, DELETE_FAILED, or DELETED are hidden from lists and queries
+    status = doc_or_payload.get("status")
+    if status in ("DELETING", "DELETE_FAILED", "DELETED"):
+        return False
+
     # Admin of the same tenant has full visibility
     if ctx.is_admin:
         return True

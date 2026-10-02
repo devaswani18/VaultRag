@@ -32,6 +32,8 @@ class DocStatus(StrEnum):
     READY = "READY"
     QUARANTINED = "QUARANTINED"
     FAILED = "FAILED"
+    DELETING = "DELETING"
+    DELETE_FAILED = "DELETE_FAILED"
     DELETED = "DELETED"
 
 
@@ -41,16 +43,29 @@ DocumentStatus = DocStatus
 
 # Allowed status transitions
 VALID_STATUS_TRANSITIONS: dict[DocStatus, set[DocStatus]] = {
-    DocStatus.PENDING_UPLOAD: {DocStatus.PROCESSING, DocStatus.FAILED, DocStatus.DELETED},
+    DocStatus.PENDING_UPLOAD: {
+        DocStatus.PROCESSING,
+        DocStatus.FAILED,
+        DocStatus.DELETING,
+        DocStatus.DELETED,
+    },
     DocStatus.PROCESSING: {
         DocStatus.READY,
         DocStatus.QUARANTINED,
         DocStatus.FAILED,
+        DocStatus.DELETING,
         DocStatus.DELETED,
     },
-    DocStatus.READY: {DocStatus.PROCESSING, DocStatus.QUARANTINED, DocStatus.DELETED},
-    DocStatus.QUARANTINED: {DocStatus.PROCESSING, DocStatus.DELETED},
-    DocStatus.FAILED: {DocStatus.PROCESSING, DocStatus.DELETED},
+    DocStatus.READY: {
+        DocStatus.PROCESSING,
+        DocStatus.QUARANTINED,
+        DocStatus.DELETING,
+        DocStatus.DELETED,
+    },
+    DocStatus.QUARANTINED: {DocStatus.PROCESSING, DocStatus.DELETING, DocStatus.DELETED},
+    DocStatus.FAILED: {DocStatus.PROCESSING, DocStatus.DELETING, DocStatus.DELETED},
+    DocStatus.DELETING: {DocStatus.DELETING, DocStatus.DELETED, DocStatus.DELETE_FAILED},
+    DocStatus.DELETE_FAILED: {DocStatus.DELETING, DocStatus.DELETED},
     DocStatus.DELETED: set(),  # Terminal state
 }
 
@@ -431,6 +446,30 @@ class DocumentRepo:
                 "allowed_users": allowed_users,
             },
         )
+
+    def create_tombstone(
+        self,
+        tenant_id: str,
+        doc_id: str,
+        deleted_by: str,
+        certificate_sha256: str,
+    ) -> dict[str, Any]:
+        """Replace the document record with a minimal tombstone, removing all metadata.
+
+        Retains strictly: tenant_id, doc_id, status: DELETED, deleted_at, deleted_by,
+        and certificate_sha256.
+        """
+        now = datetime.now(UTC).isoformat()
+        tombstone = {
+            "tenant_id": tenant_id,
+            "doc_id": doc_id,
+            "status": DocStatus.DELETED.value,
+            "deleted_at": now,
+            "deleted_by": deleted_by,
+            "certificate_sha256": certificate_sha256,
+        }
+        self.table.put_item(Item=_floats_to_decimals(tombstone))
+        return tombstone
 
     def delete(self, tenant_id: str, doc_id: str) -> None:
         """Delete document by PK and SK. Raises NotFound if item does not exist."""

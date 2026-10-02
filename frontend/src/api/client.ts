@@ -18,6 +18,9 @@ export type DocumentStatus =
   | 'READY'
   | 'QUARANTINED'
   | 'FAILED'
+  | 'DELETING'
+  | 'DELETE_FAILED'
+  | 'DELETED'
 
 export type DocumentVisibility = 'tenant' | 'roles' | 'private'
 
@@ -233,6 +236,31 @@ export async function createDocument(meta: CreateDocumentRequest): Promise<Creat
   return apiRequest<CreateDocumentResponse>('/documents', {
     method: 'POST',
     body: meta,
+  })
+}
+
+export interface ErasureCertificate {
+  version: number
+  tenant_id: string
+  doc_id: string
+  requested_by: string
+  ts: string
+  deleted: {
+    vectors: number
+    files: number
+    cache_entries: number
+  }
+  post_check: {
+    remaining_vectors: number
+    remaining_files: number
+  }
+  audit_seq: number
+  signature: string
+}
+
+export async function deleteDocument(id: string): Promise<ErasureCertificate> {
+  return apiRequest<ErasureCertificate>(`/documents/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
   })
 }
 

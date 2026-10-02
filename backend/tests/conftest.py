@@ -23,7 +23,7 @@ def _auto_mock_audit_for_unit_tests(request: pytest.FixtureRequest) -> Generator
     set up real/moto DynamoDB tables for the cryptographic audit chain.
     """
     test_path = str(request.fspath).replace("\\", "/")
-    if "tests/audit" in test_path:
+    if "tests/audit" in test_path or "tests/admin" in test_path:
         yield
         return
 

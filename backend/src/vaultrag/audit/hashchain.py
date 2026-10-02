@@ -61,7 +61,17 @@ ALLOWED_DETAIL_KEYS: dict[str, frozenset[str]] = {
     ),
     "injection_attempt": frozenset({"risk", "reasons"}),
     "quota_exceeded": frozenset({"quota", "queries"}),
-    "erasure": frozenset({"doc_id"}),
+    "erasure": frozenset(
+        {
+            "doc_id",
+            "user_id",
+            "status",
+            "certificate_sha256",
+            "deleted_vectors",
+            "deleted_files",
+            "error",
+        }
+    ),
     "audit_verify": frozenset({"valid", "checked", "broken_at_seq"}),
 }
 

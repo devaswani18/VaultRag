@@ -227,27 +227,10 @@ async def delete_document(
     doc_id: str,
     ctx: RequestContext = Depends(get_ctx),  # noqa: B008
 ) -> dict[str, Any]:
-    """Delete document (allowed for document owner or tenant admin)."""
-    repo = DocumentRepo()
-    doc = repo.get(ctx.tenant_id, doc_id)
+    """Verifiably erase document and return signed Certificate of Erasure."""
+    from vaultrag.admin.erasure import erase_document
 
-    if not can_view(ctx, doc):
-        raise NotFound(f"Document '{doc_id}' not found")
-
-    if not (ctx.is_admin or doc.get("owner_user_id") == ctx.user_id):
-        raise Forbidden("Only document owner or tenant admin can delete document")
-
-    repo.delete(ctx.tenant_id, doc_id)
-
-    # Append cryptographic audit event (security mutation must fail if audit fails)
-    append_event(
-        ctx,
-        action="document_delete",
-        resource_id=doc_id,
-        details={"deleted": True},
-    )
-
-    return {"status": "deleted", "doc_id": doc_id}
+    return erase_document(ctx, doc_id)
 
 
 @router.patch("/{doc_id}/acl")
