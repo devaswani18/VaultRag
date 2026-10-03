@@ -27,7 +27,6 @@ import {
   Search,
   Plus,
   Trash2,
-  Clock,
   Info,
 } from 'lucide-react'
 
