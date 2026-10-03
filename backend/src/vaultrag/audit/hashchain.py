@@ -8,6 +8,7 @@ import json
 import logging
 import random
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -77,6 +78,8 @@ ALLOWED_DETAIL_KEYS: dict[str, frozenset[str]] = {
         }
     ),
     "audit_verify": frozenset({"valid", "checked", "broken_at_seq"}),
+    "assurance_run": frozenset({"run_id", "passed", "total", "leaks", "report_sha256"}),
+    "assurance_run_simulated": frozenset({"run_id", "simulated_bug", "leaks"}),
 }
 
 
@@ -196,16 +199,116 @@ def append_event(
     raise Conflict(f"Failed to append audit record for tenant {t_id}")
 
 
+@dataclass
+class VerifyResult(dict):
+    """Outcome of verifying a sequence of audit records."""
+
+    valid: bool
+    checked: int
+    broken_at_seq: int | None = None
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        super().__init__(
+            valid=self.valid,
+            checked=self.checked,
+            broken_at_seq=self.broken_at_seq,
+            reason=self.reason,
+        )
+
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
+
+    def keys(self) -> list[str]:  # type: ignore[override]
+        return ["valid", "checked", "broken_at_seq", "reason"]
+
+    def items(self) -> list[tuple[str, Any]]:  # type: ignore[override]
+        return [(k, getattr(self, k)) for k in self.keys()]
+
+    def __iter__(self):
+        return iter(self.keys())
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "valid": self.valid,
+            "checked": self.checked,
+            "broken_at_seq": self.broken_at_seq,
+            "reason": self.reason,
+        }
+
+
+def verify_records(records: list[dict[str, Any]]) -> VerifyResult:
+    """Pure function verifying hash chain integrity for an in-memory list of records.
+
+    Verifies sequential continuity (starting at seq 0), prev_hash linkage,
+    and SHA256 integrity.
+    """
+    if not records:
+        return VerifyResult(valid=True, checked=0, broken_at_seq=None, reason=None)
+
+    expected_prev_hash = GENESIS_PREV_HASH
+    checked_count = 0
+
+    for expected_seq, record in enumerate(records):
+        actual_seq = int(record.get("seq", -1))
+        # 1. Continuity check
+        if actual_seq != expected_seq:
+            return VerifyResult(
+                valid=False,
+                checked=checked_count,
+                broken_at_seq=actual_seq if actual_seq >= 0 else expected_seq,
+                reason=f"Sequence gap: expected {expected_seq}, found {actual_seq}",
+            )
+
+        # 2. Previous hash linkage check
+        actual_prev_hash = record.get("prev_hash")
+        if actual_prev_hash != expected_prev_hash:
+            reason = (
+                f"Previous hash mismatch at seq {actual_seq}: "
+                f"expected {expected_prev_hash}, got {actual_prev_hash}"
+            )
+            return VerifyResult(
+                valid=False,
+                checked=checked_count,
+                broken_at_seq=actual_seq,
+                reason=reason,
+            )
+
+        # 3. Hash integrity check
+        record_core = {k: v for k, v in record.items() if k != "hash"}
+        hash_input = expected_prev_hash + canonical_json(record_core)
+        expected_hash = hashlib.sha256(hash_input.encode("utf-8")).hexdigest()
+
+        if record.get("hash") != expected_hash:
+            reason = (
+                f"Hash mismatch at seq {actual_seq}: "
+                f"computed {expected_hash}, recorded {record.get('hash')}"
+            )
+            return VerifyResult(
+                valid=False,
+                checked=checked_count,
+                broken_at_seq=actual_seq,
+                reason=reason,
+            )
+
+        expected_prev_hash = record["hash"]
+        checked_count += 1
+
+    return VerifyResult(valid=True, checked=checked_count, broken_at_seq=None, reason=None)
+
+
 def verify_chain(
     tenant_id: str,
     *,
     table_name: str | None = None,
     dynamodb_resource: Any = None,
-) -> dict[str, Any]:
+) -> VerifyResult:
     """Verify hash chain integrity for tenant.
 
-    Pages through all records, recomputes hashes, verifies sequential continuity
-    and prev_hash linkage.
+    Pages through all records from DynamoDB and delegates to verify_records.
     """
     table = _get_audit_table(table_name=table_name, dynamodb_resource=dynamodb_resource)
 
@@ -229,58 +332,7 @@ def verify_chain(
         if not exclusive_start_key:
             break
 
-    if not items:
-        return {"valid": True, "checked": 0, "broken_at_seq": None, "reason": None}
-
-    expected_prev_hash = GENESIS_PREV_HASH
-    checked_count = 0
-
-    for expected_seq, record in enumerate(items):
-        actual_seq = int(record.get("seq", -1))
-        # 1. Continuity check
-        if actual_seq != expected_seq:
-            return {
-                "valid": False,
-                "checked": checked_count,
-                "broken_at_seq": actual_seq if actual_seq >= 0 else expected_seq,
-                "reason": f"Sequence gap: expected {expected_seq}, found {actual_seq}",
-            }
-
-        # 2. Previous hash linkage check
-        actual_prev_hash = record.get("prev_hash")
-        if actual_prev_hash != expected_prev_hash:
-            reason = (
-                f"Previous hash mismatch at seq {actual_seq}: "
-                f"expected {expected_prev_hash}, got {actual_prev_hash}"
-            )
-            return {
-                "valid": False,
-                "checked": checked_count,
-                "broken_at_seq": actual_seq,
-                "reason": reason,
-            }
-
-        # 3. Hash integrity check
-        record_core = {k: v for k, v in record.items() if k != "hash"}
-        hash_input = expected_prev_hash + canonical_json(record_core)
-        expected_hash = hashlib.sha256(hash_input.encode("utf-8")).hexdigest()
-
-        if record.get("hash") != expected_hash:
-            reason = (
-                f"Hash mismatch at seq {actual_seq}: "
-                f"computed {expected_hash}, recorded {record.get('hash')}"
-            )
-            return {
-                "valid": False,
-                "checked": checked_count,
-                "broken_at_seq": actual_seq,
-                "reason": reason,
-            }
-
-        expected_prev_hash = record["hash"]
-        checked_count += 1
-
-    return {"valid": True, "checked": checked_count, "broken_at_seq": None, "reason": None}
+    return verify_records(items)
 
 
 def export_anchor(

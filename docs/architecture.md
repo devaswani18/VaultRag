@@ -105,3 +105,93 @@ To prevent unexpected monthly bills, the following traditional enterprise cloud 
 2. **No Elastic Load Balancers (ALB/NLB)**: Replaced by Lambda Function URLs with CORS and CloudFront CDN integration. Avoids ~$16.20/month base cost.
 3. **No Managed Relational Database (RDS/Aurora)**: Replaced by serverless DynamoDB on-demand tables and Qdrant Cloud Free Tier (1 GB cluster). Avoids ~$15–$50+/month.
 4. **No AWS WAF**: Replaced by native CloudFront Response Headers Policies (HSTS, CSP, X-Frame-Options) combined with application-layer tenant query quotas and token rate limits. Avoids ~$5.00/month per WebACL and $1.00/month per managed rule.
+
+---
+
+## Assurance Center: Continuous Live Security Self-Testing
+
+The **Assurance Center** is VaultRAG's flagship automated security verification system. Rather than relying solely on static unit tests or CI pipelines, the Assurance Center provides live, in-situ cryptographic verification of multi-tenant isolation, role boundaries, sensitive data protection, injection defense, and audit integrity directly against running infrastructure.
+
+### 1. Verification Architecture & Fixed Vector Canaries
+
+During an assurance run (`run_assurance`), the runner creates a unique execution context:
+1. **Synthetic Isolation Namespaces**: Creates two synthetic tenant IDs:
+   - Primary: `st-<run_id>-a`
+   - Foreign: `st-<run_id>-b`
+   Both tenant IDs begin with `st-`, a prefix strictly reserved by authentication verifiers and rejected for any real tenant or Cognito token.
+2. **Fixed Unit Vector $V$**:
+   A deterministic unit vector with dimension $D = 768$ (matching `settings.embedding_dim`) is synthesized:
+   $$V = \left[ \frac{1}{\sqrt{D}}, \frac{1}{\sqrt{D}}, \dots, \frac{1}{\sqrt{D}} \right], \quad \|V\|_2 = 1.0$$
+   Every canary vector is assigned vector $V$, and every search query uses vector $V$. This guarantees cosine similarity of $1.0$ across all canaries, ensuring that retrieval outcomes depend **strictly on access control filter logic** rather than vector distance or embedding semantics.
+3. **Zero Gemini Invocation**: The self-test suite executes entirely without calling LLM endpoints or external foundation model APIs, completing in < 10 seconds with zero API inference cost.
+
+---
+
+### 2. Canary Descriptors (C1–C6)
+
+Six canary points are planted in Qdrant with `selftest_run_id = <run_id>`:
+
+| Canary | Descriptor Name | Tenant | Visibility | Allowed Roles | Allowed Users | Owner |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **C1** | Tenant-wide Public | `st-*-a` | `tenant` | None | None | `u-admin` |
+| **C2** | Manager Role Restricted | `st-*-a` | `roles` | `["manager"]` | None | `u-admin` |
+| **C3** | Admin-Private Document | `st-*-a` | `private` | None | None | `u-admin` |
+| **C4** | User-Granted to Intern | `st-*-a` | `roles` | `["manager"]` | `["u-intern"]` | `u-admin` |
+| **C5** | Intern-Private Document | `st-*-a` | `private` | None | None | `u-intern` |
+| **C6** | Foreign-Tenant Document | `st-*-b` | `tenant` | None | None | `u-b-admin` |
+
+---
+
+### 3. The 30-Cell Expected Access Matrix
+
+Five synthetic principals query Qdrant using vector $V$ with their respective ACL filters. The results are compared against an **immutable, literal constant matrix**:
+
+| Canary Vector Tier | A-admin | A-manager | A-employee | A-intern | B-admin |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **C1** (Tenant-wide Public) | Allowed | Allowed | Allowed | Allowed | **Blocked** |
+| **C2** (Manager Role Restricted) | Allowed | Allowed | **Blocked** | **Blocked** | **Blocked** |
+| **C3** (Admin-Private Document) | Allowed | **Blocked** | **Blocked** | **Blocked** | **Blocked** |
+| **C4** (User-Granted to Intern) | Allowed | Allowed | **Blocked** | Allowed | **Blocked** |
+| **C5** (Intern-Private Document) | Allowed | **Blocked** | **Blocked** | Allowed | **Blocked** |
+| **C6** (Foreign-Tenant Document) | **Blocked** | **Blocked** | **Blocked** | **Blocked** | Allowed |
+
+> [!IMPORTANT]
+> **Ground Truth Design Principle:**
+> This matrix is hard-coded as a literal constant in [`backend/src/vaultrag/assurance/canaries.py`](file:///backend/src/vaultrag/assurance/canaries.py) and is **never** derived dynamically from `can_view()`, `build_filter()`, or any runtime helper. A logical bug in authorization logic cannot redefine the ground truth. Any discrepancy produces a `LEAK` (unauthorized access) or `MISSING` (unintended denial) state.
+
+---
+
+### 4. The 19 Security Checks Across 7 Categories
+
+| ID | Category | Check Description |
+| :--- | :--- | :--- |
+| **I1** | Isolation | Tenant A principals never retrieve foreign canary C6 under any circumstance. |
+| **I2** | Isolation | Tenant B principals never retrieve Tenant A canaries C1–C5. |
+| **I3** | Isolation | `assert_tenant_scoped` strictly rejects query filters lacking tenant conditions. |
+| **I4** | Isolation | `build_filter` fails closed upon malformed context (querying `tenant_id == '__none__'`). |
+| **A1** | Access Control | Role-restricted canary C2 is accessible to manager and blocked for general employee. |
+| **A2** | Access Control | Private canaries C3 and C5 are blocked for unauthorized peers. |
+| **A3** | Access Control | Explicit user grant in C4 allows intern retrieval while blocking general employee. |
+| **A4** | Access Control | All 30 live vector retrieval cells match the literal ground-truth matrix 100%. |
+| **D1** | Data Protection | PII guard redacts synthetic Aadhaar (Verhoeff-valid), PAN, and Credit Card numbers. |
+| **D2** | Data Protection | Zero-log filter redacts bearer tokens and email addresses from application logs. |
+| **J1** | Injection Defense | Direct prompt injection override samples are scored `high` risk ($\ge 40$). |
+| **J2** | Injection Defense | Benign policy look-alike sentences resist false positives and score `low` risk ($< 20$). |
+| **J3** | Injection Defense | Roleplay delimiter breakouts (`<|im_start|>system`) are intercepted and quarantined. |
+| **U1** | Audit Integrity | Verifies the calling tenant's cryptographic hash chain is valid and unbroken. |
+| **U2** | Audit Integrity | Synthesizes a tampered record and verifies `verify_records` detects the break immediately. |
+| **E1** | Cryptography | Verifies HMAC-SHA256 signature generation and constant-time verification. |
+| **E2** | Cryptography | Verifies that zero residual canary points remain in Qdrant after suite cleanup. |
+| **C1** | Configuration Posture | Inspects Qdrant collection to ensure payload index on `tenant_id` and `selftest_run_id` exists. |
+| **C2** | Configuration Posture | Verifies that tenant active defense policies (`pii_mode`, `injection_policy`) are active. |
+
+---
+
+### 5. Ephemeral Teardown & Cryptographic Report Signing
+
+1. **Guaranteed Cleanup in `finally`**:
+   The canary cleanup logic executes inside a `finally` block in [`backend/src/vaultrag/assurance/runner.py`](file:///backend/src/vaultrag/assurance/runner.py). Even if a check crashes or times out, all canary points for `st-<run_id>-a` and `st-<run_id>-b` are purged via `delete_by_filter`. Check `E2` then counts the remaining points to guarantee zero leakage.
+2. **Cryptographic Report Signing**:
+   Every report is canonically serialized, hashed via SHA-256 (`report_sha256`), and signed using HMAC-SHA256 with the SSM secret `cert_hmac_secret`. Reports can be exported as JSON and verified independently by third-party auditors using `POST /admin/assurance/verify`.
+3. **Controlled Simulation**:
+   Administrators can run simulated runs (`drop_role_condition`, `ignore_private`) to demonstrate leak detection in the Trust Center UI. Simulated runs are marked `simulated: true`, never overwrite `last_assurance` in DynamoDB, and emit distinct audit events (`assurance_run_simulated`).

@@ -1,10 +1,12 @@
 from vaultrag.audit.hashchain import (
     ALLOWED_DETAIL_KEYS,
+    VerifyResult,
     append_event,
     canonical_json,
     export_anchor,
     verify_anchor,
     verify_chain,
+    verify_records,
 )
 from vaultrag.audit.usage import (
     get_usage,
@@ -22,4 +24,6 @@ __all__ = [
     "reserve_query",
     "verify_anchor",
     "verify_chain",
+    "verify_records",
+    "VerifyResult",
 ]

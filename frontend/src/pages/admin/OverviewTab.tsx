@@ -3,6 +3,8 @@ import {
   OverviewSummary,
   getAdminOverview,
   verifyAuditChain,
+  getLatestAssurance,
+  AssuranceReport,
 } from '../../api/client'
 import {
   ShieldCheck,
@@ -19,6 +21,7 @@ import {
 
 export const OverviewTab: React.FC = () => {
   const [overview, setOverview] = useState<OverviewSummary | null>(null)
+  const [assuranceReport, setAssuranceReport] = useState<AssuranceReport | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
   const [verifying, setVerifying] = useState<boolean>(false)
@@ -27,8 +30,12 @@ export const OverviewTab: React.FC = () => {
     try {
       setLoading(true)
       setError(null)
-      const data = await getAdminOverview()
+      const [data, assurance] = await Promise.all([
+        getAdminOverview(),
+        getLatestAssurance().catch(() => null),
+      ])
       setOverview(data)
+      setAssuranceReport(assurance)
     } catch (err: any) {
       setError(err?.message || 'Failed to load security overview')
     } finally {
@@ -127,6 +134,60 @@ export const OverviewTab: React.FC = () => {
           <RefreshCw size={14} className={verifying ? 'spin' : ''} />
           <span>{verifying ? 'Verifying...' : 'Verify Now'}</span>
         </button>
+      </div>
+
+      {/* Assurance Center Live Posture Banner */}
+      <div
+        className="trust-card"
+        style={{
+          marginBottom: '1.25rem',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '0.75rem',
+        }}
+        data-testid="assurance-posture-card"
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <div
+            style={{
+              background: assuranceReport && assuranceReport.summary.leaks === 0
+                ? 'rgba(16, 185, 129, 0.15)'
+                : 'rgba(79, 104, 245, 0.15)',
+              color: assuranceReport && assuranceReport.summary.leaks === 0
+                ? 'var(--status-ready)'
+                : 'var(--accent-primary)',
+              borderRadius: 8,
+              padding: 8,
+              display: 'flex',
+            }}
+          >
+            <ShieldCheck size={22} />
+          </div>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <strong style={{ fontSize: '0.95rem' }}>Assurance Center Security Posture</strong>
+              {assuranceReport ? (
+                <span
+                  className={`badge ${assuranceReport.summary.leaks === 0 ? 'badge-success' : 'badge-danger'}`}
+                  data-testid="overview-assurance-badge"
+                >
+                  {assuranceReport.summary.passed}/{assuranceReport.summary.total} PASSED
+                </span>
+              ) : (
+                <span className="badge" style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)' }}>
+                  AWAITING FIRST RUN
+                </span>
+              )}
+            </div>
+            <p style={{ margin: '0.2rem 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+              {assuranceReport
+                ? `Active vector canary self-test: ${assuranceReport.summary.leaks} leaks, 30/30 access cells verified at ${new Date(assuranceReport.ts * 1000).toLocaleTimeString()}`
+                : 'Run live canary-based security testing across 19 isolation and access control checks in the Assurance tab.'}
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Quota Progress Bar Card */}

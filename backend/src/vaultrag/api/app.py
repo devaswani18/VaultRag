@@ -183,6 +183,7 @@ def create_app() -> FastAPI:
     # --------------------------------------------------------------------------
     # API Routers
     # --------------------------------------------------------------------------
+    from vaultrag.admin.assurance import router as assurance_router
     from vaultrag.admin.audit import router as audit_router
     from vaultrag.admin.erasure import router as erasure_router
     from vaultrag.admin.gaps import router as gaps_router
@@ -202,5 +203,6 @@ def create_app() -> FastAPI:
     app.include_router(erasure_router)
     app.include_router(gaps_router)
     app.include_router(overview_router)
+    app.include_router(assurance_router)
 
     return app

@@ -138,3 +138,31 @@ VaultRAG enforces an append-only, cryptographically linked hash chain with HMAC 
 > While the hash chain detects any modification or deletion within the database, an adversary with full administrative control over the underlying AWS account or DynamoDB table could theoretically drop the table or recreate a forged chain from genesis with a different private HMAC secret.
 >
 > * **Anchor Defense**: Periodically exporting and archiving anchors (`export_anchor`) to an external write-once-read-many (WORM) storage system or external compliance log mitigates this residual risk by creating an immutable external reference of the chain's state at known points in time.
+
+---
+
+## Silent Access-Control Regression
+
+### 1. Threat Description
+In multi-tenant, role-tiered RAG systems, subtle code changes or configuration drifts can silently degrade access control boundaries without causing runtime errors:
+1. **Omitted Filter Clauses**: A developer modifying `build_filter()` or refactoring query retrieval might accidentally omit role checks or user-grant clauses, causing confidential documents to leak silently to general employees.
+2. **Circular Test Blindspots**: Unit tests that assert `search_filter == build_filter(ctx)` or dynamically derive expected results from runtime helper functions like `can_view()` fail to catch systemic logical regressions (the test passes because the bug redefines the expected answer).
+3. **Payload Index Drift**: If the vector database (`tenant_id` or `selftest_run_id`) keyword index is accidentally dropped, vector search performance degrades or isolation filters fail to match properly.
+4. **Configuration Posture Degradation**: Tenant security policies (such as PII masking or prompt injection firewalls) disabled in staging or misconfigured by administrator error without detection.
+5. **Cross-Tenant Vector Bleed**: Subtle errors in filter composition allowing vectors from one tenant to appear in retrieval results of another tenant when identical or similar vector embeddings are queried.
+
+---
+
+### 2. Mitigations & Defensive Architecture
+
+VaultRAG implements the **Assurance Center**, a continuous, in-process active security testing suite:
+
+| Surface | Defensive Control | Enforcement Point |
+|---|---|---|
+| **Live Canary Planting** | Plants 6 ephemeral canary unit vectors ($V$) in Qdrant across two synthetic tenants (`st-<run_id>-a` and `st-<run_id>-b`) spanning public, role-restricted, private, user-granted, and foreign-tenant documents. | [`backend/src/vaultrag/assurance/runner.py`](file:///backend/src/vaultrag/assurance/runner.py) |
+| **Literal Ground-Truth Matrix** | Evaluates retrieval across 5 synthetic principals (`A-admin`, `A-manager`, `A-employee`, `A-intern`, `B-admin`) against a **hand-written, literal 30-cell expected matrix** that is never derived from `can_view` or runtime helpers. Any discrepancy is flagged immediately as a `LEAK` or `MISSING` cell. | [`backend/src/vaultrag/assurance/canaries.py`](file:///backend/src/vaultrag/assurance/canaries.py) |
+| **19 Security Checks Across 7 Categories** | Evaluates Isolation (`I1`–`I4`), Access Control (`A1`–`A4`), Data Protection (`D1`–`D2`), Injection Defense (`J1`–`J3`), Audit Integrity (`U1`–`U2`), Cryptography/Erasure (`E1`–`E2`), and Configuration Posture (`C1`–`C2`). | [`backend/src/vaultrag/assurance/checks.py`](file:///backend/src/vaultrag/assurance/checks.py) |
+| **Hard Ephemeral Teardown Guarantee** | Guaranteed `finally` execution in the runner deletes all canary vectors for both synthetic tenants using strict filter matching, and check `E2` explicitly verifies that 0 residual canary points remain in Qdrant. | [`backend/src/vaultrag/assurance/runner.py`](file:///backend/src/vaultrag/assurance/runner.py) |
+| **Cryptographic Attestation Signing** | Reports are canonically serialized and cryptographically signed with HMAC-SHA256 (`cert_hmac_secret`). The signature covers the entire report payload and SHA256 digest, preventing forgery or client-side tampering. | [`backend/src/vaultrag/assurance/runner.py`](file:///backend/src/vaultrag/assurance/runner.py) |
+| **Controlled Fault Injection** | Administrators can simulate access regressions (`drop_role_condition`, `ignore_private`) in non-production simulation mode to verify alert mechanisms. Simulated runs never overwrite `last_assurance` in DynamoDB and always record distinct `assurance_run_simulated` audit events. | [`backend/src/vaultrag/admin/assurance.py`](file:///backend/src/vaultrag/admin/assurance.py) |
+| **Evaluation Harness Hard Gate** | The evaluation benchmark harness (`eval/run_eval.py`) runs the Assurance Center self-test suite in-process as an automated hard gate during mock evaluation; any leak immediately fails the build. | [`eval/run_eval.py`](file:///eval/run_eval.py) |

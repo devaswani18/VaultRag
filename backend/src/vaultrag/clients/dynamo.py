@@ -132,6 +132,10 @@ class TenantRepo:
         status: str = "ACTIVE",
     ) -> dict[str, Any]:
         """Create or replace tenant configuration with default settings merged."""
+        if tenant_id.startswith("st-"):
+            raise ValidationFailed(
+                f"Tenant ID prefix 'st-' is reserved for system assurance self-tests: '{tenant_id}'"
+            )
         merged_settings = {**DEFAULT_TENANT_SETTINGS, **(settings or {})}
         now = datetime.now(UTC).isoformat()
         item: dict[str, Any] = {

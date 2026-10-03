@@ -37,6 +37,32 @@ def _get_cert_hmac_secret() -> str:
         return os.environ.get("VAULTRAG_SECRET_CERT_HMAC_SECRET", "dev-insecure-hmac-secret-12345")
 
 
+def sign_payload(payload: dict[str, Any], secret: str | bytes) -> dict[str, Any]:
+    """Pure function: return a copy of payload with HMAC-SHA256 'signature' attached.
+
+    Computed over canonical_json of payload without 'signature'.
+    """
+    secret_bytes = secret.encode("utf-8") if isinstance(secret, str) else secret
+    core = {k: v for k, v in payload.items() if k != "signature"}
+    canonical = canonical_json(core)
+    signature = hmac.new(secret_bytes, canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+    return {**core, "signature": signature}
+
+
+def verify_signed_payload(payload: dict[str, Any], secret: str | bytes) -> bool:
+    """Pure function: verify HMAC-SHA256 signature with constant-time comparison."""
+    if not isinstance(payload, dict):
+        return False
+    sig = payload.get("signature")
+    if not sig or not isinstance(sig, str):
+        return False
+    secret_bytes = secret.encode("utf-8") if isinstance(secret, str) else secret
+    core = {k: v for k, v in payload.items() if k != "signature"}
+    canonical = canonical_json(core)
+    expected_sig = hmac.new(secret_bytes, canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig, expected_sig)
+
+
 def invalidate_doc_cache(
     tenant_id: str,
     doc_id: str,
@@ -212,12 +238,7 @@ def erase_document(
             "audit_seq": audit_seq,
         }
 
-        canonical_cert = canonical_json(cert_payload)
-        signature = hmac.new(
-            secret.encode("utf-8"), canonical_cert.encode("utf-8"), hashlib.sha256
-        ).hexdigest()
-        certificate = {**cert_payload, "signature": signature}
-
+        certificate = sign_payload(cert_payload, secret)
         cert_sha256 = hashlib.sha256(canonical_json(certificate).encode("utf-8")).hexdigest()
 
         # Step h: Replace DynamoDB record with TOMBSTONE
@@ -318,15 +339,8 @@ def verify_certificate(
     if missing:
         return {"valid": False, "reason": f"Malformed certificate: missing fields {missing}"}
 
-    # Recompute HMAC over core fields without signature
-    cert_core = {k: v for k, v in cert.items() if k != "signature"}
     secret = hmac_secret or _get_cert_hmac_secret()
-    canonical = canonical_json(cert_core)
-    expected_sig = hmac.new(
-        secret.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256
-    ).hexdigest()
-
-    if not hmac.compare_digest(sig, expected_sig):
+    if not verify_signed_payload(cert, secret):
         return {
             "valid": False,
             "reason": (

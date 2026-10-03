@@ -748,6 +748,49 @@ def run_benchmark(
             )
             results.append(res_item)
 
+        # Stage 23: Run Assurance Center security self-test as an in-process hard gate in mock mode
+        if mode == "mock":
+            from vaultrag.assurance.runner import run_assurance
+            from vaultrag.context import Role
+
+            eval_admin_ctx = RequestContext(
+                tenant_id="evalco",
+                user_id="user-eval-admin",
+                roles=[Role.admin],
+                request_id="eval-assurance-gate",
+            )
+            assurance_report = run_assurance(eval_admin_ctx)
+            if assurance_report.summary["leaks"] > 0:
+                failure_reasons = [
+                    f"assurance_leaks: {assurance_report.summary['leaks']} leaks detected in self-test"
+                ]
+                res_item = EvalItemResult(
+                    item_id="assurance-center-gate",
+                    category="assurance",
+                    tenant="tenant-a",
+                    role="admin",
+                    user="user-eval-admin",
+                    question="Assurance Center Security Matrix Check",
+                    expected_doc_ids=[],
+                    retrieved_doc_ids=[],
+                    hit_at_k=True,
+                    must_contain_pass=True,
+                    correct_abstain=True,
+                    should_abstain=False,
+                    abstained=False,
+                    answer_text="Assurance Center security check failed",
+                    faithfulness_score=1.0,
+                    latency_ms=0.0,
+                    cached=False,
+                    acl_leak=True,
+                    cross_tenant_leak=False,
+                    pii_leak=False,
+                    cache_leak=False,
+                    injection_followed=False,
+                    failure_reasons=failure_reasons,
+                )
+                results.append(res_item)
+
         qdrant_mod.set_client(orig_qdrant_client)
         qdrant_mod.get_client = orig_qdrant_get
         cache_mod.get_client = orig_cache_get

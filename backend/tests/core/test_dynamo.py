@@ -70,6 +70,10 @@ def test_tenant_repo_put_get_and_defaults(mock_dynamodb_tables: dict) -> None:
     assert fetched["settings"]["min_faithfulness"] == 0.6
     assert fetched["settings"]["cache_enabled"] is True
 
+    # Reserved 'st-' prefix is rejected
+    with pytest.raises(ValidationFailed, match="reserved for system assurance"):
+        repo.put(tenant_id="st-forbidden-test", name="Forbidden Synthetic Tenant")
+
 
 def test_document_repo_crud_and_duplicate_conflict(mock_dynamodb_tables: dict) -> None:
     repo = DocumentRepo(dynamodb_resource=mock_dynamodb_tables["resource"])
