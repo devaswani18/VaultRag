@@ -7,6 +7,11 @@ import * as apiClient from '../../api/client'
 vi.mock('../../api/client', () => ({
   query: vi.fn(),
   listDocuments: vi.fn(),
+  getPolicies: vi.fn().mockResolvedValue({ chat_history_days: 7 }),
+  listConversations: vi.fn().mockResolvedValue([]),
+  getConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
+  deleteConversation: vi.fn().mockResolvedValue({ status: 'deleted' }),
+  clearAllConversations: vi.fn().mockResolvedValue({ status: 'cleared' }),
 }))
 
 const renderChatPage = (initialEntries: any[] = ['/chat']) => {
@@ -325,7 +330,12 @@ describe('ChatPage Component', () => {
 
     // Ensure apiClient.query was called with question, topK (5), and docIds: ['doc-pre']
     await waitFor(() => {
-      expect(apiClient.query).toHaveBeenCalledWith('What is in the special report?', 5, ['doc-pre'])
+      expect(apiClient.query).toHaveBeenCalledWith(
+        'What is in the special report?',
+        5,
+        ['doc-pre'],
+        undefined
+      )
     })
 
     // Scope note displayed in answer

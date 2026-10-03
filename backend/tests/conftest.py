@@ -23,7 +23,11 @@ def _auto_mock_audit_for_unit_tests(request: pytest.FixtureRequest) -> Generator
     set up real/moto DynamoDB tables for the cryptographic audit chain.
     """
     test_path = str(request.fspath).replace("\\", "/")
-    if "tests/audit" in test_path or "tests/admin" in test_path:
+    if (
+        "tests/audit" in test_path
+        or "tests/admin" in test_path
+        or "test_chat_history.py" in test_path
+    ):
         yield
         return
 
@@ -43,5 +47,11 @@ def _auto_mock_audit_for_unit_tests(request: pytest.FixtureRequest) -> Generator
     with (
         patch("vaultrag.api.routers.documents.append_event", return_value=mock_rec),
         patch("vaultrag.admin.policies.append_event", return_value=mock_rec),
+        patch("vaultrag.api.routers.chat.append_event", return_value=mock_rec),
+        patch("vaultrag.rag.query_service.append_event", return_value=mock_rec),
+        patch("vaultrag.rag.query_service.reserve_query", return_value=None),
+        patch("vaultrag.rag.query_service.increment", return_value=None),
+        patch("vaultrag.rag.query_service.record_knowledge_gap", return_value=None),
+        patch("vaultrag.rag.query_service.ConversationRepo"),
     ):
         yield

@@ -38,6 +38,9 @@ class QueryRequest(BaseModel):
     doc_ids: list[str] | None = Field(
         None, description="Optional document IDs to scope search (max 20)"
     )
+    conversation_id: str | None = Field(
+        None, description="Optional conversation ID for conversation history tracking"
+    )
 
     @field_validator("doc_ids")
     @classmethod
@@ -74,6 +77,7 @@ async def query(
         req.question,
         top_k=req.top_k,
         doc_ids=req.doc_ids,
+        conversation_id=req.conversation_id,
         retrieve_fn=_current_module.retrieve,
         generate_fn=_current_module.generate_answer,
         tenant_repo_cls=_current_module.TenantRepo,

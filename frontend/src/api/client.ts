@@ -89,6 +89,7 @@ export interface QueryResponse {
   trust?: QueryTrust
   sources: QuerySource[]
   scope?: { scoped: boolean; n_docs: number }
+  conversation_id?: string
   request_id?: string
   pii_in_answer?: boolean
   injection_attempt?: boolean
@@ -279,11 +280,15 @@ export async function deleteDocument(id: string): Promise<ErasureCertificate> {
 export async function query(
   question: string,
   topK: number = 6,
-  docIds?: string[]
+  docIds?: string[],
+  conversationId?: string
 ): Promise<QueryResponse> {
   const body: Record<string, any> = { question, top_k: topK }
   if (docIds && docIds.length > 0) {
     body.doc_ids = docIds
+  }
+  if (conversationId) {
+    body.conversation_id = conversationId
   }
   return apiRequest<QueryResponse>('/query', {
     method: 'POST',
@@ -418,6 +423,7 @@ export interface TenantPolicies {
   cache_enabled: boolean
   retain_original_files: boolean
   llm_judge_enabled: boolean
+  chat_history_days?: number
   settings_version?: number
 }
 
@@ -611,5 +617,86 @@ export async function verifyAssuranceReport(
   return apiRequest<AssuranceVerifyResult>('/admin/assurance/verify', {
     method: 'POST',
     body: report,
+  })
+}
+
+// -----------------------------------------------------------------------------
+// Conversation History API
+// -----------------------------------------------------------------------------
+
+export interface ConversationSummary {
+  conversation_id: string
+  title: string
+  created_at: string
+  updated_at: string
+  message_count: number
+  expires_at?: number
+}
+
+export interface ConversationMessage {
+  conversation_id: string
+  seq: number
+  role: 'user' | 'assistant'
+  text: string
+  trust?: QueryTrust
+  sources?: QuerySource[]
+  created_at: string
+  expires_at?: number
+}
+
+export interface ConversationListResponse {
+  conversations: ConversationSummary[]
+  next_token: string | null
+}
+
+export interface ConversationDetailResponse {
+  conversation: ConversationSummary
+  messages: ConversationMessage[]
+  next_token: string | null
+}
+
+export async function listConversations(
+  limit: number = 50,
+  nextToken?: string
+): Promise<ConversationListResponse> {
+  let url = `/chat/conversations?limit=${limit}`
+  if (nextToken) {
+    url += `&next_token=${encodeURIComponent(nextToken)}`
+  }
+  return apiRequest<ConversationListResponse>(url)
+}
+
+export async function getConversation(
+  conversationId: string,
+  limit: number = 100
+): Promise<ConversationDetailResponse> {
+  return apiRequest<ConversationDetailResponse>(
+    `/chat/conversations/${encodeURIComponent(conversationId)}?limit=${limit}`
+  )
+}
+
+export async function deleteConversation(
+  conversationId: string
+): Promise<{ status: string; conversation_id: string; messages_deleted: number }> {
+  return apiRequest<{ status: string; conversation_id: string; messages_deleted: number }>(
+    `/chat/conversations/${encodeURIComponent(conversationId)}`,
+    {
+      method: 'DELETE',
+    }
+  )
+}
+
+export async function clearAllConversations(): Promise<{
+  status: string
+  conversations_deleted: number
+  messages_deleted: number
+}> {
+  return apiRequest<{
+    status: string
+    conversations_deleted: number
+    messages_deleted: number
+  }>('/chat/conversations', {
+    method: 'DELETE',
+    body: { confirm: true },
   })
 }

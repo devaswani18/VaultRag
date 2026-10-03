@@ -23,6 +23,7 @@ DEFAULT_TENANT_SETTINGS: dict[str, Any] = {
     "cache_enabled": True,
     "retain_original_files": True,
     "llm_judge_enabled": False,
+    "chat_history_days": 7,
     "settings_version": 1,
 }
 
@@ -487,3 +488,17 @@ class DocumentRepo:
             if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
                 raise NotFound(f"Document '{doc_id}' not found for tenant '{tenant_id}'") from e
             raise
+
+
+# Re-export ConversationRepo from chat.history
+from vaultrag.chat.history import ConversationRepo  # noqa: E402
+
+__all__ = [
+    "DEFAULT_TENANT_SETTINGS",
+    "ConversationRepo",
+    "DocStatus",
+    "DocumentRepo",
+    "DocumentStatus",
+    "TenantRepo",
+    "VALID_STATUS_TRANSITIONS",
+]

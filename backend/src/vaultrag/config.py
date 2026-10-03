@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     audit_table: str = "vaultrag-dev-audit"
     usage_table: str = "vaultrag-dev-usage"
     gaps_table: str = "vaultrag-dev-gaps"
+    conversations_table: str = "vaultrag-dev-conversations"
     docs_bucket: str = "vaultrag-docs-dev"
     qdrant_collection: str = "vaultrag_chunks"
     cache_collection: str = "vaultrag_cache"

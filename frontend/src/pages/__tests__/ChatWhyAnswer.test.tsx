@@ -6,6 +6,12 @@ import * as apiClient from '../../api/client'
 
 vi.mock('../../api/client', () => ({
   query: vi.fn(),
+  listDocuments: vi.fn().mockResolvedValue([]),
+  getPolicies: vi.fn().mockResolvedValue({ chat_history_days: 7 }),
+  listConversations: vi.fn().mockResolvedValue([]),
+  getConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
+  deleteConversation: vi.fn().mockResolvedValue({ status: 'deleted' }),
+  clearAllConversations: vi.fn().mockResolvedValue({ status: 'cleared' }),
 }))
 
 describe('ChatPage "Why this answer?" Panel', () => {

@@ -30,6 +30,7 @@ ALLOWED_SETTINGS_KEYS = frozenset(
         "cache_enabled",
         "retain_original_files",
         "llm_judge_enabled",
+        "chat_history_days",
     }
 )
 
@@ -123,6 +124,15 @@ def _validate_patch_payload(body: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(val, bool):
             raise ValidationFailed("llm_judge_enabled must be a boolean")
         cleaned["llm_judge_enabled"] = val
+
+    # 9. chat_history_days (int 0..30)
+    if "chat_history_days" in body:
+        val = body["chat_history_days"]
+        if isinstance(val, bool) or not isinstance(val, int):
+            raise ValidationFailed("chat_history_days must be an integer between 0 and 30")
+        if not (0 <= val <= 30):
+            raise ValidationFailed("chat_history_days must be an integer between 0 and 30")
+        cleaned["chat_history_days"] = val
 
     return cleaned
 
