@@ -631,13 +631,17 @@ export const ChatPage: React.FC = () => {
                                     <FileText size={12} style={{ display: 'inline', marginRight: 4 }} />
                                     {src.filename} {src.page !== null ? `(Page ${src.page})` : ''}
                                   </span>
-                                  <span className="why-source-score">
-                                    Score: {src.score.toFixed(3)}
-                                  </span>
+                                  {src.score !== undefined && (
+                                    <span className="why-source-score">
+                                      Score: {src.score.toFixed(3)}
+                                    </span>
+                                  )}
                                 </div>
-                                <div className="why-source-snippet">
-                                  "{src.snippet}"
-                                </div>
+                                {src.snippet && (
+                                  <div className="why-source-snippet">
+                                    "{src.snippet}"
+                                  </div>
+                                )}
                               </div>
                             ))}
                           </div>
@@ -681,9 +685,11 @@ export const ChatPage: React.FC = () => {
                               {src.filename}
                               {src.page !== null && ` (p. ${src.page})`}
                             </span>
-                            <span className="source-score" data-testid="source-score">
-                              Score: {src.score.toFixed(3)}
-                            </span>
+                            {src.score !== undefined && (
+                              <span className="source-score" data-testid="source-score">
+                                Score: {src.score.toFixed(3)}
+                              </span>
+                            )}
                           </div>
                           {src.snippet && (
                             <div className="source-snippet" data-testid="source-snippet">
