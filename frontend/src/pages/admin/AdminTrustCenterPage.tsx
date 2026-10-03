@@ -18,10 +18,12 @@ import { KnowledgeGapsTab } from './KnowledgeGapsTab'
 import { PoliciesTab } from './PoliciesTab'
 import { QuarantineTab } from './QuarantineTab'
 import { UsageTab } from './UsageTab'
+import { AssuranceTab } from './AssuranceTab'
 import { CertificateVerifyBox } from './CertificateVerifyBox'
 
 type TabKey =
   | 'overview'
+  | 'assurance'
   | 'documents'
   | 'audit'
   | 'gaps'
@@ -37,6 +39,7 @@ interface TabDef {
 
 const TABS: TabDef[] = [
   { key: 'overview', label: 'Overview', icon: LayoutDashboard },
+  { key: 'assurance', label: 'Assurance', icon: ShieldCheck },
   { key: 'documents', label: 'Documents', icon: Files },
   { key: 'audit', label: 'Audit', icon: ScrollText },
   { key: 'gaps', label: 'Knowledge Gaps', icon: HelpCircle },
@@ -119,6 +122,7 @@ export const AdminTrustCenterPage: React.FC = () => {
         style={{ marginTop: '1.25rem' }}
       >
         {activeTab === 'overview' && <OverviewTab />}
+        {activeTab === 'assurance' && <AssuranceTab />}
         {activeTab === 'documents' && <DocumentsTab />}
         {activeTab === 'audit' && <AuditTab />}
         {activeTab === 'gaps' && <KnowledgeGapsTab />}

@@ -234,3 +234,17 @@ def test_verify_oversized_token() -> None:
     giant_string = "A" * 8500
     with pytest.raises(Unauthorized, match="exceeds maximum allowed size of 8 KB"):
         verify_id_token(giant_string)
+
+
+@respx.mock
+def test_verify_reserved_st_prefix_rejected(
+    rsa_keys: tuple[rsa.RSAPrivateKey, dict[str, Any]],
+) -> None:
+    priv, jwk = rsa_keys
+    respx.get(f"{TEST_ISSUER}/.well-known/jwks.json").mock(
+        return_value=Response(200, json={"keys": [jwk]})
+    )
+
+    token = make_token(priv, tenant_id="st-selftest-1")
+    with pytest.raises(Unauthorized, match="reserved for system assurance"):
+        verify_id_token(token, expected_issuer=TEST_ISSUER, expected_client_id=TEST_CLIENT_ID)

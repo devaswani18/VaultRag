@@ -548,3 +548,68 @@ export async function patchDocumentAcl(
     body: acl,
   })
 }
+
+export interface MatrixCell {
+  canary: string
+  principal: string
+  expected_allowed: boolean
+  actually_allowed: boolean
+  state: 'allowed' | 'blocked' | 'leak' | 'missing'
+}
+
+export interface CheckResult {
+  id: string
+  group: string
+  name: string
+  severity: 'high' | 'medium' | 'low' | 'warning'
+  passed: boolean
+  expected: string
+  actual: string
+  detail: string
+}
+
+export interface AssuranceSummary {
+  passed: number
+  total: number
+  leaks: number
+  missing: number
+}
+
+export interface AssuranceReport {
+  run_id: string
+  tenant_id: string
+  ts: number
+  version: number
+  simulated: boolean
+  simulated_bug: string | null
+  summary: AssuranceSummary
+  matrix: MatrixCell[]
+  checks: CheckResult[]
+  report_sha256?: string
+  signature?: string
+}
+
+export interface AssuranceVerifyResult {
+  valid: boolean
+  reason: string | null
+}
+
+export async function runAssurance(simulateBug?: string | null): Promise<AssuranceReport> {
+  return apiRequest<AssuranceReport>('/admin/assurance/run', {
+    method: 'POST',
+    body: { simulate_bug: simulateBug || null },
+  })
+}
+
+export async function getLatestAssurance(): Promise<AssuranceReport> {
+  return apiRequest<AssuranceReport>('/admin/assurance/latest')
+}
+
+export async function verifyAssuranceReport(
+  report: Record<string, any>
+): Promise<AssuranceVerifyResult> {
+  return apiRequest<AssuranceVerifyResult>('/admin/assurance/verify', {
+    method: 'POST',
+    body: report,
+  })
+}

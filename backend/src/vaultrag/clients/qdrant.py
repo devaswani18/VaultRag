@@ -115,6 +115,7 @@ def ensure_collection(collection_name: str | None = None) -> None:
         "allowed_roles",
         "allowed_users",
         "owner_user_id",
+        "selftest_run_id",
     ]
     for field in keyword_fields:
         with contextlib.suppress(Exception):

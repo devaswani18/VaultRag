@@ -187,6 +187,10 @@ def verify_id_token(
     tenant_id = payload.get("custom:tenant_id")
     if not tenant_id or not isinstance(tenant_id, str) or not TENANT_ID_REGEX.match(tenant_id):
         raise Unauthorized(f"Missing or invalid 'custom:tenant_id' claim: '{tenant_id}'")
+    if tenant_id.startswith("st-"):
+        raise Unauthorized(
+            f"Tenant ID prefix 'st-' is reserved for system assurance self-tests: '{tenant_id}'"
+        )
 
     raw_groups = payload.get("cognito:groups", [])
     if isinstance(raw_groups, str):
