@@ -132,16 +132,6 @@ You can test the platform using the provided demo files located in the `demo-doc
 - OCR (Optical Character Recognition for scanned PDFs)
 - Load testing and benchmarking
 
-## 10. Screenshots
-*Knowledge Vault Query Interface*
-![Chat Interface](docs/img/chat_interface.png)
-
-*Trust Center - Cryptographic Audit Ledger*
-![Trust Center](docs/img/trust_center.png)
-
-*Assurance Center Matrix*
-![Assurance Center](docs/img/assurance_center.png)
-
-## 11. Team and License
+## 10. Team and License
 Developed by the DevAswani18 Team.
 Licensed under the MIT License.
