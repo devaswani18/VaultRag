@@ -496,16 +496,23 @@ def run_benchmark(
         thresh_data = yaml.safe_load(f)
     soft_thresholds = thresh_data.get("soft_gates", {})
 
+    # Monkeypatch Qdrant client to use our in-memory instance
+    import vaultrag.admin.erasure as erasure_mod
+    import vaultrag.clients.gemini as gemini_mod
+    import vaultrag.clients.qdrant as qdrant_mod
+    import vaultrag.ingest.handler as handler_mod
+    import vaultrag.rag.semantic_cache as cache_mod
+
+    orig_qdrant_client = qdrant_mod._QDRANT_CLIENT
+    orig_qdrant_get = qdrant_mod.get_client
+    orig_cache_get = cache_mod.get_client
+    orig_erasure_get = erasure_mod.get_client
+    orig_gemini_embed = gemini_mod.embed_texts
+    orig_handler_embed = handler_mod.embed_texts
+
     with mock_aws():
         # Setup environment and ingest
         qdrant_client, _ = setup_hermetic_environment()
-
-        # Monkeypatch Qdrant client to use our in-memory instance
-        import vaultrag.admin.erasure as erasure_mod
-        import vaultrag.clients.gemini as gemini_mod
-        import vaultrag.clients.qdrant as qdrant_mod
-        import vaultrag.ingest.handler as handler_mod
-        import vaultrag.rag.semantic_cache as cache_mod
 
         qdrant_mod.set_client(qdrant_client)
         qdrant_mod.get_client = lambda: qdrant_client
@@ -554,6 +561,7 @@ def run_benchmark(
             must_contain = item.get("must_contain", [])
             forbidden_substrings = item.get("forbidden_substrings", [])
             should_abstain = bool(item.get("should_abstain", False))
+            doc_ids = item.get("doc_ids")
 
             ctx = RequestContext(
                 tenant_id=tenant_id,
@@ -573,6 +581,7 @@ def run_benchmark(
                     ctx,
                     question,
                     top_k=6,
+                    doc_ids=doc_ids,
                     generate_fn=gen_fn,
                 )
             except Exception as e:  # noqa: BLE001
@@ -738,6 +747,13 @@ def run_benchmark(
                 failure_reasons=failure_reasons,
             )
             results.append(res_item)
+
+        qdrant_mod.set_client(orig_qdrant_client)
+        qdrant_mod.get_client = orig_qdrant_get
+        cache_mod.get_client = orig_cache_get
+        erasure_mod.get_client = orig_erasure_get
+        gemini_mod.embed_texts = orig_gemini_embed
+        handler_mod.embed_texts = orig_handler_embed
 
     # Compute Aggregate Metrics
     summary = compute_summary(results, mode, soft_thresholds)

@@ -1,5 +1,6 @@
-import React, { useRef, useState } from 'react'
-import { QuerySource, QueryTrust, query } from '../api/client'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
+import { DocumentRecord, QuerySource, QueryTrust, listDocuments, query } from '../api/client'
 import {
   Send,
   FileText,
@@ -10,6 +11,8 @@ import {
   ShieldAlert,
   AlertTriangle,
   HelpCircle,
+  X,
+  Search,
 } from 'lucide-react'
 
 interface ChatMessage {
@@ -18,11 +21,14 @@ interface ChatMessage {
   text: string
   sources?: QuerySource[]
   trust?: QueryTrust
+  scope?: { scoped: boolean; n_docs: number }
+  scopeFilenames?: string[]
   pii_in_answer?: boolean
   injection_attempt?: boolean
 }
 
 export const ChatPage: React.FC = () => {
+  const location = useLocation()
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'msg-welcome',
@@ -35,7 +41,46 @@ export const ChatPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false)
   const [queryError, setQueryError] = useState<string | null>(null)
 
+  // Document scope state
+  const [selectedDocIds, setSelectedDocIds] = useState<string[]>([])
+  const [docNameMap, setDocNameMap] = useState<Record<string, string>>({})
+  const [readyDocs, setReadyDocs] = useState<DocumentRecord[]>([])
+  const [isDocModalOpen, setIsDocModalOpen] = useState(false)
+  const [docSearchQuery, setDocSearchQuery] = useState('')
+  const [isLoadingDocs, setIsLoadingDocs] = useState(false)
+
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Handle preselected document navigation from Documents page
+  useEffect(() => {
+    const state = location.state as { preselectedDoc?: { id: string; filename: string } } | null
+    if (state?.preselectedDoc) {
+      const doc = state.preselectedDoc
+      setSelectedDocIds([doc.id])
+      setDocNameMap((prev) => ({ ...prev, [doc.id]: doc.filename }))
+    }
+  }, [location.state])
+
+  const loadReadyDocs = useCallback(async () => {
+    setIsLoadingDocs(true)
+    try {
+      const docs = await listDocuments()
+      const ready = docs.filter((d) => d.status === 'READY')
+      setReadyDocs(ready)
+      const map: Record<string, string> = {}
+      for (const d of ready) {
+        const id = d.id || (d as any).doc_id
+        if (id) {
+          map[id] = d.filename
+        }
+      }
+      setDocNameMap((prev) => ({ ...map, ...prev }))
+    } catch {
+      // ignore
+    } finally {
+      setIsLoadingDocs(false)
+    }
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -54,8 +99,17 @@ export const ChatPage: React.FC = () => {
     setQuestion('')
     setIsLoading(true)
 
+    const scopedFilenames =
+      selectedDocIds.length > 0
+        ? selectedDocIds.map((id) => docNameMap[id] || id)
+        : undefined
+
     try {
-      const resp = await query(trimmed, topK)
+      const resp = await query(
+        trimmed,
+        topK,
+        selectedDocIds.length > 0 ? selectedDocIds : undefined
+      )
       const assistantMsgId = `asst-${Date.now()}`
       setMessages([
         ...newMessages,
@@ -65,6 +119,8 @@ export const ChatPage: React.FC = () => {
           text: resp.answer,
           sources: resp.sources,
           trust: resp.trust,
+          scope: resp.scope,
+          scopeFilenames: scopedFilenames,
           pii_in_answer: resp.pii_in_answer,
           injection_attempt: resp.injection_attempt,
         },
@@ -221,6 +277,27 @@ export const ChatPage: React.FC = () => {
                 {msg.text}
               </div>
 
+              {/* Answered from scope plain text display */}
+              {msg.sender === 'assistant' && (msg.sources || msg.trust) && (
+                <div
+                  className="message-scope-answered-from"
+                  data-testid="message-scope-text"
+                  style={{
+                    fontSize: '0.8rem',
+                    color: 'var(--text-secondary)',
+                    marginTop: '0.35rem',
+                    marginBottom: '0.35rem',
+                  }}
+                >
+                  Answered from:{' '}
+                  {msg.sources && msg.sources.length > 0
+                    ? Array.from(new Set(msg.sources.map((s) => s.filename))).join(', ')
+                    : msg.scopeFilenames && msg.scopeFilenames.length > 0
+                    ? msg.scopeFilenames.join(', ')
+                    : 'All documents I can access'}
+                </div>
+              )}
+
               {/* Visible Note when Partial */}
               {isPartial && (
                 <div className="partial-note-banner" data-testid="partial-note-banner">
@@ -370,6 +447,294 @@ export const ChatPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Document Scope Control Bar */}
+      <div
+        className="chat-scope-bar"
+        data-testid="chat-scope-bar"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '0.75rem',
+          padding: '0.45rem 0.75rem',
+          background: 'var(--bg-surface)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 'var(--radius-sm)',
+          marginBottom: '0.5rem',
+          flexWrap: 'wrap',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <label
+            htmlFor="search-in-select"
+            style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', fontWeight: 500 }}
+          >
+            Search in:
+          </label>
+          <select
+            id="search-in-select"
+            className="form-input"
+            style={{ width: 'auto', padding: '0.25rem 0.6rem', fontSize: '0.82rem' }}
+            value={selectedDocIds.length > 0 ? 'selected' : 'all'}
+            onChange={(e) => {
+              if (e.target.value === 'selected') {
+                loadReadyDocs()
+                setIsDocModalOpen(true)
+              } else {
+                setSelectedDocIds([])
+              }
+            }}
+            data-testid="select-search-in"
+          >
+            <option value="all">All documents I can access</option>
+            <option value="selected">Selected documents</option>
+          </select>
+        </div>
+
+        {selectedDocIds.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span
+              className="scope-chip"
+              data-testid="scope-chip"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                padding: '0.2rem 0.55rem',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--bg-surface-hover)',
+                border: '1px solid var(--border-strong)',
+                fontSize: '0.8rem',
+                color: 'var(--text-primary)',
+              }}
+            >
+              <span>{`Searching ${selectedDocIds.length} document${selectedDocIds.length > 1 ? 's' : ''}`}</span>
+              <button
+                type="button"
+                onClick={() => setSelectedDocIds([])}
+                data-testid="btn-clear-scope"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  color: 'var(--text-secondary)',
+                }}
+                title="Clear document scope"
+                aria-label="Clear document scope"
+              >
+                <X size={13} />
+              </button>
+            </span>
+            <button
+              type="button"
+              className="btn-secondary"
+              style={{ padding: '0.2rem 0.5rem', fontSize: '0.78rem' }}
+              onClick={() => {
+                loadReadyDocs()
+                setIsDocModalOpen(true)
+              }}
+              data-testid="btn-edit-scope"
+            >
+              Change
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Document Selection Modal */}
+      {isDocModalOpen && (
+        <div
+          className="modal-backdrop"
+          data-testid="doc-scope-modal"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+          }}
+        >
+          <div
+            className="modal-card"
+            style={{
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border-strong)',
+              borderRadius: 'var(--radius-md)',
+              padding: '1.25rem',
+              width: '90%',
+              maxWidth: 480,
+              maxHeight: '80vh',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: '1rem',
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 600 }}>
+                Select Documents to Scope Search
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsDocModalOpen(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                }}
+                data-testid="btn-close-scope-modal"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Filter Search Box */}
+            <div style={{ position: 'relative', marginBottom: '0.75rem' }}>
+              <input
+                type="text"
+                className="form-input"
+                style={{ width: '100%', paddingLeft: '2rem' }}
+                placeholder="Search documents by filename..."
+                value={docSearchQuery}
+                onChange={(e) => setDocSearchQuery(e.target.value)}
+                data-testid="input-doc-search"
+              />
+              <Search
+                size={14}
+                style={{
+                  position: 'absolute',
+                  left: '0.7rem',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  color: 'var(--text-muted)',
+                }}
+              />
+            </div>
+
+            {/* Document list */}
+            <div
+              style={{
+                flex: 1,
+                overflowY: 'auto',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '0.5rem',
+                maxHeight: '300px',
+              }}
+              data-testid="doc-select-list"
+            >
+              {isLoadingDocs ? (
+                <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                  Loading documents...
+                </div>
+              ) : readyDocs.filter((d) =>
+                  d.filename.toLowerCase().includes(docSearchQuery.toLowerCase())
+                ).length === 0 ? (
+                <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                  No matching READY documents found.
+                </div>
+              ) : (
+                readyDocs
+                  .filter((d) =>
+                    d.filename.toLowerCase().includes(docSearchQuery.toLowerCase())
+                  )
+                  .map((doc) => {
+                    const id = doc.id || (doc as any).doc_id
+                    const isChecked = selectedDocIds.includes(id)
+                    return (
+                      <label
+                        key={id}
+                        data-testid={`doc-select-item-${id}`}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.6rem',
+                          padding: '0.4rem 0.5rem',
+                          borderRadius: 'var(--radius-sm)',
+                          cursor: 'pointer',
+                          background: isChecked ? 'var(--bg-surface-hover)' : 'transparent',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          data-testid={`checkbox-doc-${id}`}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedDocIds((prev) => [...prev, id])
+                              setDocNameMap((prev) => ({ ...prev, [id]: doc.filename }))
+                            } else {
+                              setSelectedDocIds((prev) => prev.filter((i) => i !== id))
+                            }
+                          }}
+                        />
+                        <span
+                          style={{
+                            fontSize: '0.86rem',
+                            color: 'var(--text-primary)',
+                            wordBreak: 'break-all',
+                          }}
+                        >
+                          {doc.filename}
+                        </span>
+                      </label>
+                    )
+                  })
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginTop: '1rem',
+                paddingTop: '0.75rem',
+                borderTop: '1px solid var(--border-subtle)',
+              }}
+            >
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                {selectedDocIds.length} selected
+              </span>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                {selectedDocIds.length > 0 && (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    style={{ fontSize: '0.8rem', padding: '0.3rem 0.6rem' }}
+                    onClick={() => setSelectedDocIds([])}
+                    data-testid="btn-modal-clear-all"
+                  >
+                    Clear All
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn-primary"
+                  style={{ fontSize: '0.8rem', padding: '0.3rem 0.75rem' }}
+                  onClick={() => setIsDocModalOpen(false)}
+                  data-testid="btn-modal-done"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Input bar */}
       <form onSubmit={handleSubmit} className="chat-input-bar">

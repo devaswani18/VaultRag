@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { ChatPage } from '../ChatPage'
 import * as apiClient from '../../api/client'
 
@@ -36,7 +37,11 @@ describe('ChatPage "Why this answer?" Panel', () => {
       injection_attempt: false,
     })
 
-    render(<ChatPage />)
+    render(
+      <MemoryRouter>
+        <ChatPage />
+      </MemoryRouter>
+    )
 
     const textarea = screen.getByTestId('input-chat-question')
     fireEvent.change(textarea, { target: { value: 'What is the leave policy?' } })
