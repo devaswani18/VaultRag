@@ -143,5 +143,5 @@ You can test the platform using the provided demo files located in the `demo-doc
 ![Assurance Center](docs/img/assurance_center.png)
 
 ## 11. Team and License
-Developed by the DevAswani18 Team.
+Developed by the Dev Aswani , Shubham Singh Mewada , Shikhar Singh and Vineet Kumar.
 Licensed under the MIT License.
