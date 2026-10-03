@@ -68,7 +68,10 @@ def get_s3_client(s3_client: Any = None) -> Any:
     if s3_client is not None:
         return s3_client
     settings = get_settings()
-    return boto3.client("s3", region_name=settings.aws_region)
+    from botocore.config import Config
+
+    config = Config(signature_version="s3v4", s3={"addressing_style": "virtual"})
+    return boto3.client("s3", region_name=settings.aws_region, config=config)
 
 
 def create_presigned_post(
