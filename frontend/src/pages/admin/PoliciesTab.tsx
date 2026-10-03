@@ -19,6 +19,7 @@ export const PoliciesTab: React.FC = () => {
     cache_enabled: true,
     retain_original_files: true,
     llm_judge_enabled: false,
+    chat_history_days: 7,
   })
 
   const [loading, setLoading] = useState<boolean>(true)
@@ -88,6 +89,16 @@ export const PoliciesTab: React.FC = () => {
       errors.daily_query_quota = 'Must be an integer between 1 and 10,000'
     }
 
+    if (
+      policies.chat_history_days !== undefined &&
+      (isNaN(policies.chat_history_days) ||
+        !Number.isInteger(Number(policies.chat_history_days)) ||
+        policies.chat_history_days < 0 ||
+        policies.chat_history_days > 30)
+    ) {
+      errors.chat_history_days = 'Must be an integer between 0 and 30 days'
+    }
+
     setClientErrors(errors)
     return Object.keys(errors).length === 0
   }
@@ -116,6 +127,7 @@ export const PoliciesTab: React.FC = () => {
         cache_enabled: Boolean(policies.cache_enabled),
         retain_original_files: Boolean(policies.retain_original_files),
         llm_judge_enabled: Boolean(policies.llm_judge_enabled),
+        chat_history_days: Number(policies.chat_history_days ?? 7),
       }
 
       const updated = await updatePolicies(patchPayload)
@@ -310,6 +322,34 @@ export const PoliciesTab: React.FC = () => {
               Maximum number of queries permitted per calendar day (UTC) before rate limits engage.
             </span>
           </div>
+
+          {/* 6. chat_history_days */}
+          <div className="form-group">
+            <label htmlFor="field-chat-history-days" className="form-label">
+              Conversation History Retention (0 – 30 Days)
+            </label>
+            <input
+              id="field-chat-history-days"
+              type="number"
+              step="1"
+              min="0"
+              max="30"
+              className={`form-input ${clientErrors.chat_history_days ? 'input-error' : ''}`}
+              value={policies.chat_history_days ?? 7}
+              onChange={(e) =>
+                setPolicies({ ...policies, chat_history_days: parseInt(e.target.value, 10) })
+              }
+              data-testid="input-chat-history-days"
+            />
+            {clientErrors.chat_history_days && (
+              <span className="error-text" data-testid="error-chat-history-days">
+                {clientErrors.chat_history_days}
+              </span>
+            )}
+            <span className="form-help-text">
+              Number of days to store user conversation history before automatic TTL expiration (0 disables history).
+            </span>
+          </div>
         </div>
 
         {/* Toggles Grid */}
@@ -421,6 +461,7 @@ export const PoliciesTab: React.FC = () => {
               <div><strong>Injection Policy:</strong> {policies.injection_policy}</div>
               <div><strong>Min Faithfulness:</strong> {policies.min_faithfulness}</div>
               <div><strong>Daily Quota:</strong> {policies.daily_query_quota} queries</div>
+              <div><strong>Chat History Retention:</strong> {policies.chat_history_days ?? 7} days</div>
               <div><strong>LLM Judge:</strong> {policies.llm_judge_enabled ? 'Enabled' : 'Disabled'}</div>
             </div>
 

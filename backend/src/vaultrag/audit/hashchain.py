@@ -80,6 +80,8 @@ ALLOWED_DETAIL_KEYS: dict[str, frozenset[str]] = {
     "audit_verify": frozenset({"valid", "checked", "broken_at_seq"}),
     "assurance_run": frozenset({"run_id", "passed", "total", "leaks", "report_sha256"}),
     "assurance_run_simulated": frozenset({"run_id", "simulated_bug", "leaks"}),
+    "conversation_deleted": frozenset({"conversation_id", "messages_deleted"}),
+    "conversations_cleared": frozenset({"conversations_deleted", "messages_deleted"}),
 }
 
 

@@ -390,6 +390,19 @@ def setup_hermetic_environment() -> tuple[QdrantClient, dict[str, Any]]:
         ],
         BillingMode="PAY_PER_REQUEST",
     )
+    # Conversations table
+    dynamodb.create_table(
+        TableName=settings.conversations_table,
+        KeySchema=[
+            {"AttributeName": "pk", "KeyType": "HASH"},
+            {"AttributeName": "sk", "KeyType": "RANGE"},
+        ],
+        AttributeDefinitions=[
+            {"AttributeName": "pk", "AttributeType": "S"},
+            {"AttributeName": "sk", "AttributeType": "S"},
+        ],
+        BillingMode="PAY_PER_REQUEST",
+    )
 
     # 3. Create tenants in DynamoDB
     tenant_repo = TenantRepo()

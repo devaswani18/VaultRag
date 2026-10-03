@@ -76,7 +76,9 @@ resource "aws_iam_role_policy" "lambda_api" {
           aws_dynamodb_table.usage.arn,
           "${aws_dynamodb_table.usage.arn}/*",
           aws_dynamodb_table.gaps.arn,
-          "${aws_dynamodb_table.gaps.arn}/*"
+          "${aws_dynamodb_table.gaps.arn}/*",
+          aws_dynamodb_table.conversations.arn,
+          "${aws_dynamodb_table.conversations.arn}/*"
         ]
       },
       # 3. S3 Documents Bucket: Object operations restricted under uploads/*

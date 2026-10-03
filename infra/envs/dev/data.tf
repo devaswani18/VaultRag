@@ -196,6 +196,42 @@ resource "aws_dynamodb_table" "gaps" {
   }
 }
 
+# 6. Conversations Table (Privacy-Preserving User Conversation History)
+# Item Schema:
+# - pk (PK, S): Format "<tenant_id>#<user_id>" (strictly derived from authenticated context)
+# - sk (SK, S): Format "C#<conversation_id>" (conversation metadata) or "M#<conversation_id>#<seq>" (message)
+# - expires_at (N): Epoch timestamp for automatic DynamoDB TTL expiration
+resource "aws_dynamodb_table" "conversations" {
+  name                        = "${local.name_prefix}-conversations"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "pk"
+  range_key                   = "sk"
+  deletion_protection_enabled = false
+
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+
+  point_in_time_recovery {
+    enabled = false
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+}
+
 # ==============================================================================
 # S3 Documents Bucket (Raw Document Ingestion & Storage)
 # ==============================================================================

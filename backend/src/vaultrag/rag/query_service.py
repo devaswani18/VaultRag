@@ -5,13 +5,16 @@ and Trust Layer guards.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import time
+import uuid
 from typing import Any
 
 from vaultrag.admin.gaps import record_knowledge_gap
 from vaultrag.audit.hashchain import append_event
 from vaultrag.audit.usage import increment, reserve_query
+from vaultrag.chat.history import ConversationRepo
 from vaultrag.clients import gemini as gemini_client
 from vaultrag.clients.dynamo import TenantRepo
 from vaultrag.context import RequestContext
@@ -29,6 +32,53 @@ logger = logging.getLogger(__name__)
 
 _ABSTAIN_ANSWER = "I could not find this in the documents you can access."
 _SNIPPET_MAX_LEN = 200
+
+_REWRITE_SYSTEM_PROMPT = (
+    "You are a search query reformulator. Given the user's previous questions and "
+    "their latest follow-up question, rewrite the latest question into a self-contained, "
+    "standalone search query.\n"
+    'Do NOT answer the question. Return strictly a JSON object: {"standalone_question": "..."}.'
+)
+
+
+def _rewrite_standalone_question(
+    previous_user_questions: list[str],
+    current_question: str,
+    pii_mode: str,
+) -> tuple[str, int]:
+    """Rewrite follow-up question using ONLY previous user questions (max 3).
+
+    Returns (rewritten_question, extra_tokens). Falls back to current_question on error.
+    """
+    last_3 = previous_user_questions[-3:]
+    user_prompt = "Previous questions asked by the user:\n"
+    for q in last_3:
+        user_prompt += f"- {q}\n"
+    user_prompt += f"\nCurrent follow-up question: {current_question}\n"
+    user_prompt += "Rewrite the current follow-up question into a standalone question."
+
+    try:
+        gen_res = gemini_client.generate_json(
+            system_prompt=_REWRITE_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+        )
+        data = json.loads(gen_res.text)
+        standalone = str(data.get("standalone_question", "")).strip()
+        tokens = (getattr(gen_res, "input_tokens", 0) or 0) + (
+            getattr(gen_res, "output_tokens", 0) or 0
+        )
+        if not standalone:
+            return current_question, tokens
+
+        # Run PII guard on the rewritten question
+        pii_res = apply_policy(standalone, mode=pii_mode)
+        if pii_res.blocked:
+            return current_question, tokens
+        clean_rewritten = pii_res.text if pii_mode == "redact" else standalone
+        return clean_rewritten, tokens
+    except Exception as e:
+        logger.warning("Failed to rewrite standalone question with Gemini: %s", e)
+        return current_question, 0
 
 
 def _make_snippet(text: str) -> str:
@@ -104,6 +154,7 @@ def _finish_and_audit(
     redacted_question: str | None = None,
     top_score: float = 0.0,
     min_faithfulness: float = 0.6,
+    extra_tokens: int = 0,
 ) -> dict[str, Any]:
     """Record query audit event, increment usage counters, and record knowledge gaps."""
     duration_ms = round((time.monotonic() - start_time) * 1000, 2)
@@ -154,7 +205,9 @@ def _finish_and_audit(
 
     # Meter usage (queries already reserved by reserve_query)
     try:
-        est_tokens = (len(question) + len(str(response_dict.get("answer", "")))) // 4
+        est_tokens = (
+            (len(question) + len(str(response_dict.get("answer", "")))) // 4
+        ) + extra_tokens
         increment(
             ctx,
             queries=0,
@@ -190,6 +243,7 @@ def execute_query(
     top_k: int = 6,
     *,
     doc_ids: list[str] | None = None,
+    conversation_id: str | None = None,
     retrieve_fn: Any = None,
     generate_fn: Any = None,
     tenant_repo_cls: Any = None,
@@ -197,7 +251,7 @@ def execute_query(
     """Execute end-to-end RAG query workflow with retrieval gating and faithfulness scoring."""
     start_time = time.monotonic()
     _retrieve = retrieve_fn or retrieve
-    _generate = generate_fn or generate_answer
+    _generate = generate_answer if generate_fn is None else generate_fn
     _repo_cls = tenant_repo_cls or TenantRepo
 
     is_scoped = bool(doc_ids)
@@ -216,6 +270,7 @@ def execute_query(
     min_retrieval_score = float(settings.get("min_retrieval_score", 0.35))
     min_faithfulness = float(settings.get("min_faithfulness", 0.6))
     daily_query_quota = int(settings.get("daily_query_quota", 200))
+    chat_history_days = int(settings.get("chat_history_days", 7))
 
     # Atomic quota reservation before retrieval/generation
     try:
@@ -252,17 +307,89 @@ def execute_query(
 
     clean_question = q_res.text if pii_mode == "redact" else question
 
-    # 3. Embed clean_question once for both cache lookup and vector retrieval
+    # 2b. Handle conversation history and standalone question rewrite
+    active_conversation_id: str | None = None
+    rewrite_tokens = 0
+    search_question = clean_question
+
+    if chat_history_days > 0:
+        conv_repo = ConversationRepo()
+        if conversation_id:
+            # Caller supplied conversation_id: verify ownership else 404
+            conv_repo.get_conversation(ctx.tenant_id, ctx.user_id, conversation_id)
+            active_conversation_id = conversation_id
+        else:
+            # Create a new conversation titled with the first 60 characters of clean_question
+            new_id = uuid.uuid4().hex[:16]
+            conv_repo.create(
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                conversation_id=new_id,
+                title=clean_question[:60],
+                ttl_days=chat_history_days,
+            )
+            active_conversation_id = new_id
+
+        # Check for previous user questions to potentially rewrite short follow-up questions
+        try:
+            prev_msgs, _ = conv_repo.get_messages(
+                ctx.tenant_id, ctx.user_id, active_conversation_id
+            )
+            prev_user_questions = [m["text"] for m in prev_msgs if m.get("role") == "user"]
+            # If previous user questions exist and new question has <= 12 words, rewrite
+            word_count = len(clean_question.split())
+            if prev_user_questions and word_count <= 12:
+                search_question, rewrite_tokens = _rewrite_standalone_question(
+                    prev_user_questions, clean_question, pii_mode=pii_mode
+                )
+        except Exception as err:
+            logger.warning("Error fetching previous messages or rewriting question: %s", err)
+
+    # 3. Embed search_question once for both cache lookup and vector retrieval
     cache_enabled = bool(settings.get("cache_enabled", True))
     cache_similarity_threshold = float(settings.get("cache_similarity_threshold", 0.95))
     kb_version = int(tenant_rec.get("kb_version", 1))
 
     try:
-        vectors = gemini_client.embed_texts([clean_question], task_type="RETRIEVAL_QUERY")
+        vectors = gemini_client.embed_texts([search_question], task_type="RETRIEVAL_QUERY")
         question_vector = vectors[0] if vectors else None
     except Exception as e:
         logger.warning("Failed to embed question: %s", e)
         question_vector = None
+
+    # Helper function to append to conversation history before returning
+    def _save_history_and_attach_id(response_payload: dict[str, Any]) -> None:
+        if chat_history_days > 0 and active_conversation_id:
+            response_payload["conversation_id"] = active_conversation_id
+            # PII guard over the assistant text
+            asst_text = str(response_payload.get("answer", ""))
+            ans_pii = apply_policy(asst_text, mode=pii_mode)
+            clean_asst_text = ans_pii.text if pii_mode == "redact" else asst_text
+
+            # Prepare message items: user message (clean_question) + assistant message
+            user_msg = {
+                "role": "user",
+                "text": clean_question,
+                "trust": {"score": 1.0, "abstained": False, "partial": False},
+                "sources": [],
+            }
+            asst_msg = {
+                "role": "assistant",
+                "text": clean_asst_text,
+                "trust": response_payload.get("trust", {}),
+                "sources": response_payload.get("sources", []),
+            }
+            try:
+                c_repo = ConversationRepo()
+                c_repo.append_messages(
+                    ctx.tenant_id,
+                    ctx.user_id,
+                    active_conversation_id,
+                    [user_msg, asst_msg],
+                    ttl_days=chat_history_days,
+                )
+            except Exception as hist_err:
+                logger.warning("Failed to append messages to conversation history: %s", hist_err)
 
     # 4. Semantic Cache Lookup (BEFORE retrieval, bypassed if scoped)
     if not is_scoped and cache_enabled and question_vector is not None:
@@ -275,6 +402,7 @@ def execute_query(
         if cached_resp is not None:
             logger.info("Semantic cache hit for tenant=%s, user=%s", ctx.tenant_id, ctx.user_id)
             cached_resp["scope"] = scope_data
+            _save_history_and_attach_id(cached_resp)
             return _finish_and_audit(
                 ctx,
                 question,
@@ -286,22 +414,23 @@ def execute_query(
                 redacted_question=clean_question,
                 top_score=1.0,
                 min_faithfulness=min_faithfulness,
+                extra_tokens=rewrite_tokens,
             )
 
     # 5. Retrieve top_k chunks through ACL-scoped vector retrieval (reusing question_vector)
     try:
         chunks = _retrieve(
             ctx,
-            clean_question,
+            search_question,
             top_k=top_k,
             query_vector=question_vector,
             doc_ids=doc_ids,
         )
     except TypeError:
         try:
-            chunks = _retrieve(ctx, clean_question, top_k=top_k, query_vector=question_vector)
+            chunks = _retrieve(ctx, search_question, top_k=top_k, query_vector=question_vector)
         except TypeError:
-            chunks = _retrieve(ctx, clean_question, top_k=top_k)
+            chunks = _retrieve(ctx, search_question, top_k=top_k)
 
     # 6. Retrieval Gate: if no results OR best score < min_retrieval_score, abstain immediately
     best_score = max((c.score for c in chunks), default=0.0)
@@ -328,6 +457,7 @@ def execute_query(
             "pii_in_answer": False,
             "injection_attempt": injection_attempt,
         }
+        _save_history_and_attach_id(resp)
         return _finish_and_audit(
             ctx,
             question,
@@ -339,6 +469,7 @@ def execute_query(
             redacted_question=clean_question,
             top_score=best_score,
             min_faithfulness=min_faithfulness,
+            extra_tokens=rewrite_tokens,
         )
 
     # 7. Generate structured answer with canary and XML sandboxing
@@ -367,6 +498,7 @@ def execute_query(
             "pii_in_answer": False,
             "injection_attempt": injection_attempt,
         }
+        _save_history_and_attach_id(resp)
         return _finish_and_audit(
             ctx,
             question,
@@ -378,6 +510,7 @@ def execute_query(
             redacted_question=clean_question,
             top_score=best_score,
             min_faithfulness=min_faithfulness,
+            extra_tokens=rewrite_tokens,
         )
 
     # 8. Output guard verification (canary leak, untrusted URLs, system prompt leak)
@@ -399,6 +532,7 @@ def execute_query(
             "pii_in_answer": False,
             "injection_attempt": injection_attempt,
         }
+        _save_history_and_attach_id(resp)
         return _finish_and_audit(
             ctx,
             question,
@@ -410,6 +544,7 @@ def execute_query(
             redacted_question=clean_question,
             top_score=best_score,
             min_faithfulness=min_faithfulness,
+            extra_tokens=rewrite_tokens,
         )
 
     # 9. Check factual faithfulness of answer segments against source chunks
@@ -450,6 +585,7 @@ def execute_query(
                 "pii_in_answer": False,
                 "injection_attempt": injection_attempt,
             }
+            _save_history_and_attach_id(resp)
             return _finish_and_audit(
                 ctx,
                 question,
@@ -461,6 +597,7 @@ def execute_query(
                 redacted_question=clean_question,
                 top_score=best_score,
                 min_faithfulness=min_faithfulness,
+                extra_tokens=rewrite_tokens,
             )
 
         reduced_text = " ".join(str(s.get("text", "")).strip() for s in supported_segments)
@@ -497,6 +634,9 @@ def execute_query(
         "injection_attempt": injection_attempt,
     }
 
+    # Attach conversation_id and append messages to conversation history
+    _save_history_and_attach_id(resp)
+
     # 12. Store in semantic cache if eligible (grounded, non-abstained, non-partial, and unscoped)
     if (
         not is_scoped
@@ -527,4 +667,5 @@ def execute_query(
         redacted_question=clean_question,
         top_score=best_score,
         min_faithfulness=min_faithfulness,
+        extra_tokens=rewrite_tokens,
     )

@@ -120,10 +120,25 @@ def mock_audit_dynamo(aws_env: None) -> Generator[dict[str, Any], None, None]:
             )
         )
 
+        # 5. Conversations table
+        conversations_table = dynamodb.create_table(
+            TableName="vaultrag-dev-conversations",
+            KeySchema=[
+                {"AttributeName": "pk", "KeyType": "HASH"},
+                {"AttributeName": "sk", "KeyType": "RANGE"},
+            ],
+            AttributeDefinitions=[
+                {"AttributeName": "pk", "AttributeType": "S"},
+                {"AttributeName": "sk", "AttributeType": "S"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
+
         audit_table = _wrap_table_threadsafe(audit_table)
         usage_table = _wrap_table_threadsafe(usage_table)
         tenants_table = _wrap_table_threadsafe(tenants_table)
         documents_table = _wrap_table_threadsafe(documents_table)
+        conversations_table = _wrap_table_threadsafe(conversations_table)
 
         yield {
             "resource": dynamodb,
@@ -131,4 +146,5 @@ def mock_audit_dynamo(aws_env: None) -> Generator[dict[str, Any], None, None]:
             "usage": usage_table,
             "tenants": tenants_table,
             "documents": documents_table,
+            "conversations": conversations_table,
         }

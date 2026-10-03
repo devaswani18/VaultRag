@@ -166,3 +166,40 @@ VaultRAG implements the **Assurance Center**, a continuous, in-process active se
 | **Cryptographic Attestation Signing** | Reports are canonically serialized and cryptographically signed with HMAC-SHA256 (`cert_hmac_secret`). The signature covers the entire report payload and SHA256 digest, preventing forgery or client-side tampering. | [`backend/src/vaultrag/assurance/runner.py`](file:///backend/src/vaultrag/assurance/runner.py) |
 | **Controlled Fault Injection** | Administrators can simulate access regressions (`drop_role_condition`, `ignore_private`) in non-production simulation mode to verify alert mechanisms. Simulated runs never overwrite `last_assurance` in DynamoDB and always record distinct `assurance_run_simulated` audit events. | [`backend/src/vaultrag/admin/assurance.py`](file:///backend/src/vaultrag/admin/assurance.py) |
 | **Evaluation Harness Hard Gate** | The evaluation benchmark harness (`eval/run_eval.py`) runs the Assurance Center self-test suite in-process as an automated hard gate during mock evaluation; any leak immediately fails the build. | [`eval/run_eval.py`](file:///eval/run_eval.py) |
+
+---
+
+## Privacy-Preserving Conversation History
+
+### 1. Threat Description & Privacy Architecture
+Users interacting with chat interfaces expect conversations to persist across page reloads and support multi-turn query context. However, storing chat histories introduces several privacy and security risks:
+1. **Administrative Surveillance & Unauthorized Reading**: If tenant administrators or peers can inspect stored chat transcripts, user confidentiality is compromised.
+2. **PII and Secret Ingestion**: Questions or assistant answers containing sensitive data (PANs, Aadhaar numbers, credentials) persisting indefinitely in chat records.
+3. **Prompt Leakage in Context Rewriting**: Incorporating sensitive document snippets into LLM query rewriting prompts.
+4. **Stale Information & Access Desynchronization (Honest Limitation)**: An old stored assistant answer may reflect information from documents that the user later loses access to (via ACL revoking) or that were later permanently erased under GDPR/DPDP Right-to-Erasure requests.
+
+---
+
+### 2. Mitigations & Defensive Architecture
+
+| Surface | Defensive Control | Enforcement Point |
+|---|---|---|
+| **Strict User Isolation** | Partition key `pk` in DynamoDB is always derived from authenticated `RequestContext` (`<tenant_id>#<user_id>`). A user can only access their own conversations. Other users and tenant admins attempting to read another user's conversation receive **HTTP 404 (Not Found)**. | [`backend/src/vaultrag/chat/history.py`](file:///backend/src/vaultrag/chat/history.py), [`backend/src/vaultrag/api/routers/chat.py`](file:///backend/src/vaultrag/api/routers/chat.py) |
+| **No Admin Read Access** | **No administrative API endpoint exists** to list, read, or export other users' conversations. Route tables strictly lack any admin chat inspection paths. | [`backend/src/vaultrag/api/app.py`](file:///backend/src/vaultrag/api/app.py) |
+| **Double PII Sanitization** | Both the user's question and the assistant's answer pass through `apply_policy()` before storage. Plaintext or raw sensitive identifiers are never stored in DynamoDB items. Sources store metadata only (`doc_id`, `filename`, `chunk_id`, `page`); raw snippets are excluded. | [`backend/src/vaultrag/rag/query_service.py`](file:///backend/src/vaultrag/rag/query_service.py), [`backend/src/vaultrag/chat/history.py`](file:///backend/src/vaultrag/chat/history.py) |
+| **Document-Free Follow-Up Rewriting** | When rewriting short follow-up questions ($\le 12$ words), the rewrite prompt includes **ONLY the user's previous questions (max 3)**. Previous assistant responses, retrieved document chunks, and snippets are strictly excluded. The rewritten query passes through PII inspection before vector retrieval. | [`backend/src/vaultrag/rag/query_service.py`](file:///backend/src/vaultrag/rag/query_service.py) |
+| **Retention & Automatic Purging** | Governed by tenant policy `chat_history_days` (default 7, max 30, 0 = disabled). Items carry `expires_at` for automatic DynamoDB TTL deletion. In addition, users can invoke per-conversation deletion (`DELETE /chat/conversations/{id}`) or bulk deletion (`DELETE /chat/conversations`). | [`backend/src/vaultrag/chat/history.py`](file:///backend/src/vaultrag/chat/history.py) |
+| **Audit Log Minimization** | Deletion and clear actions append immutable audit events carrying strictly count metadata (`messages_deleted`, `conversations_deleted`). Titles, questions, and text never enter audit records. | [`backend/src/vaultrag/audit/hashchain.py`](file:///backend/src/vaultrag/audit/hashchain.py), [`backend/src/vaultrag/api/routers/chat.py`](file:///backend/src/vaultrag/api/routers/chat.py) |
+
+---
+
+### 3. Limitations & Residual Risk: Stale Answers
+
+> [!NOTE]
+> **Known Limitation: Stale Historical Answers**
+> An assistant answer stored in a user's conversation history reflects the knowledge and access permissions at the exact moment the query was executed. If a source document cited in an answer is later deleted via right-to-erasure or if the user's role is subsequently downgraded, the historical assistant response in their private chat history may still reflect facts derived from that document until the conversation expires or is cleared.
+>
+> **Mitigations**:
+> 1. Short retention windows (configurable `chat_history_days`, default 7 days, max 30 days) minimize the temporal exposure window.
+> 2. The user has direct control to permanently purge conversations at any time ("Clear history").
+> 3. Snippets and chunk texts are not stored in message history items, preserving minimal footprint.
