@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from vaultrag.clients import gemini as gemini_client
 from vaultrag.clients import qdrant as qdrant_client
 from vaultrag.context import RequestContext
-from vaultrag.security.acl import build_filter
+from vaultrag.security.acl import build_filter, build_scoped_filter
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,7 @@ def retrieve(
     top_k: int = 6,
     *,
     query_vector: list[float] | None = None,
+    doc_ids: list[str] | None = None,
 ) -> list[RetrievedChunk]:
     """Embed *question* (or use precomputed *query_vector*) and return top-*top_k* chunks.
 
@@ -68,7 +69,7 @@ def retrieve(
         effective_vector = query_vector
 
     # 2. Build mandatory tenant-scoped ACL filter
-    acl_filter = build_filter(ctx)
+    acl_filter = build_scoped_filter(ctx, doc_ids) if doc_ids else build_filter(ctx)
 
     # 3. Search Qdrant
     scored_points = qdrant_client.search(

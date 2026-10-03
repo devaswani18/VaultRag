@@ -88,6 +88,7 @@ export interface QueryResponse {
   answer: string
   trust?: QueryTrust
   sources: QuerySource[]
+  scope?: { scoped: boolean; n_docs: number }
   request_id?: string
   pii_in_answer?: boolean
   injection_attempt?: boolean
@@ -275,10 +276,18 @@ export async function deleteDocument(id: string): Promise<ErasureCertificate> {
   })
 }
 
-export async function query(question: string, topK: number = 6): Promise<QueryResponse> {
+export async function query(
+  question: string,
+  topK: number = 6,
+  docIds?: string[]
+): Promise<QueryResponse> {
+  const body: Record<string, any> = { question, top_k: topK }
+  if (docIds && docIds.length > 0) {
+    body.doc_ids = docIds
+  }
   return apiRequest<QueryResponse>('/query', {
     method: 'POST',
-    body: { question, top_k: topK },
+    body,
   })
 }
 

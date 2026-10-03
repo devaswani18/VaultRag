@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   DocumentRecord,
   DocumentVisibility,
@@ -19,6 +20,7 @@ import {
   Trash2,
   Download,
   ShieldCheck,
+  MessageSquare,
 } from 'lucide-react'
 
 const ALLOWED_EXTENSIONS = ['pdf', 'docx', 'txt', 'md']
@@ -34,6 +36,7 @@ const CONTENT_TYPE_MAP: Record<string, string> = {
 }
 
 export const DocumentsPage: React.FC = () => {
+  const navigate = useNavigate()
   const [documents, setDocuments] = useState<DocumentRecord[]>([])
   const [isLoadingDocs, setIsLoadingDocs] = useState<boolean>(true)
   const [fetchError, setFetchError] = useState<string | null>(null)
@@ -467,17 +470,53 @@ export const DocumentsPage: React.FC = () => {
                     {new Date(doc.created_at).toLocaleString()}
                   </td>
                   <td>
-                    <button
-                      type="button"
-                      className="btn-danger-outline"
-                      style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                      onClick={() => setDeletingDoc(doc)}
-                      data-testid={`btn-delete-${doc.id}`}
-                      title="Verifiably erase document"
-                    >
-                      <Trash2 size={14} />
-                      <span>Erase</span>
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      {doc.status === 'READY' && (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          style={{
+                            padding: '0.35rem 0.65rem',
+                            fontSize: '0.8rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.35rem',
+                          }}
+                          onClick={() =>
+                            navigate('/chat', {
+                              state: {
+                                preselectedDoc: {
+                                  id: doc.id || (doc as any).doc_id,
+                                  filename: doc.filename,
+                                },
+                              },
+                            })
+                          }
+                          data-testid={`btn-ask-doc-${doc.id || (doc as any).doc_id}`}
+                          title="Ask about this document"
+                        >
+                          <MessageSquare size={14} />
+                          <span>Ask about this document</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn-danger-outline"
+                        style={{
+                          padding: '0.35rem 0.65rem',
+                          fontSize: '0.8rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.35rem',
+                        }}
+                        onClick={() => setDeletingDoc(doc)}
+                        data-testid={`btn-delete-${doc.id}`}
+                        title="Verifiably erase document"
+                      >
+                        <Trash2 size={14} />
+                        <span>Erase</span>
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))

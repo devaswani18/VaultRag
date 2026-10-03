@@ -162,3 +162,43 @@ def build_doc_filter(ctx: RequestContext, doc_id: str) -> models.Filter:
         )
     )
     return filt
+
+
+def build_scoped_filter(ctx: RequestContext, doc_ids: list[str]) -> models.Filter:
+    """Build a Qdrant Filter that restricts results to tenant/document ACLs AND the given doc_ids.
+
+    Composes the filter from build_filter(ctx) with doc_id MatchAny(doc_ids).
+    Never rebuilds ACL rules. Fails closed if any exception occurs.
+    The tenant_id condition remains a top-level must condition.
+    """
+    try:
+        base_filter = build_filter(ctx)
+        if not doc_ids:
+            return base_filter
+
+        scope_filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="doc_id",
+                    match=models.MatchAny(any=list(doc_ids)),
+                )
+            ]
+        )
+        must_conditions = list(base_filter.must or [])
+        must_conditions.append(scope_filter)
+        return models.Filter(must=must_conditions)
+    except Exception as e:
+        logger.error(
+            "Failed to build scoped ACL filter for tenant=%s user=%s: %s",
+            getattr(ctx, "tenant_id", "unknown"),
+            getattr(ctx, "user_id", "unknown"),
+            type(e).__name__,
+        )
+        return models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="tenant_id",
+                    match=models.MatchValue(value="__none__"),
+                )
+            ]
+        )

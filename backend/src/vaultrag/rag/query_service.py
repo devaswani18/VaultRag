@@ -114,6 +114,10 @@ def _finish_and_audit(
     is_abstained = bool(response_dict.get("trust", {}).get("abstained", False))
     reasons = response_dict.get("trust", {}).get("reasons", [])
 
+    scope_info = response_dict.get("scope", {})
+    is_scoped = bool(scope_info.get("scoped", False))
+    n_scope_docs = int(scope_info.get("n_docs", 0))
+
     pii_types_in_q: list[str] = []
     if q_res is not None and hasattr(q_res, "findings"):
         pii_types_in_q = sorted({f.category for f in q_res.findings})
@@ -130,6 +134,8 @@ def _finish_and_audit(
         "pii_types_in_question": pii_types_in_q,
         "pii_in_answer": bool(response_dict.get("pii_in_answer", False)),
         "latency_ms": duration_ms,
+        "scoped": is_scoped,
+        "n_scope_docs": n_scope_docs,
     }
     if is_abstained and reasons:
         audit_details["reason"] = str(reasons[0])
@@ -161,8 +167,9 @@ def _finish_and_audit(
         logger.error("Failed to increment query usage: %s", e)
 
     # Record knowledge gap if query abstained or trust score < min_faithfulness
+    # (Skip knowledge gap recording for document-scoped queries)
     trust_score = float(response_dict.get("trust", {}).get("score", 0.0))
-    if (is_abstained or trust_score < min_faithfulness) and redacted_question:
+    if not is_scoped and (is_abstained or trust_score < min_faithfulness) and redacted_question:
         gap_reason = str(reasons[0]) if (is_abstained and reasons) else "insufficient_faithfulness"
         try:
             record_knowledge_gap(
@@ -182,6 +189,7 @@ def execute_query(
     question: str,
     top_k: int = 6,
     *,
+    doc_ids: list[str] | None = None,
     retrieve_fn: Any = None,
     generate_fn: Any = None,
     tenant_repo_cls: Any = None,
@@ -191,6 +199,9 @@ def execute_query(
     _retrieve = retrieve_fn or retrieve
     _generate = generate_fn or generate_answer
     _repo_cls = tenant_repo_cls or TenantRepo
+
+    is_scoped = bool(doc_ids)
+    scope_data = {"scoped": is_scoped, "n_docs": len(doc_ids) if doc_ids else 0}
 
     # 0. Load tenant settings
     tenant_rec: dict[str, Any] = {}
@@ -253,8 +264,8 @@ def execute_query(
         logger.warning("Failed to embed question: %s", e)
         question_vector = None
 
-    # 4. Semantic Cache Lookup (BEFORE retrieval)
-    if cache_enabled and question_vector is not None:
+    # 4. Semantic Cache Lookup (BEFORE retrieval, bypassed if scoped)
+    if not is_scoped and cache_enabled and question_vector is not None:
         cached_resp = cache_lookup(
             ctx,
             question_vector=question_vector,
@@ -263,6 +274,7 @@ def execute_query(
         )
         if cached_resp is not None:
             logger.info("Semantic cache hit for tenant=%s, user=%s", ctx.tenant_id, ctx.user_id)
+            cached_resp["scope"] = scope_data
             return _finish_and_audit(
                 ctx,
                 question,
@@ -278,9 +290,18 @@ def execute_query(
 
     # 5. Retrieve top_k chunks through ACL-scoped vector retrieval (reusing question_vector)
     try:
-        chunks = _retrieve(ctx, clean_question, top_k=top_k, query_vector=question_vector)
+        chunks = _retrieve(
+            ctx,
+            clean_question,
+            top_k=top_k,
+            query_vector=question_vector,
+            doc_ids=doc_ids,
+        )
     except TypeError:
-        chunks = _retrieve(ctx, clean_question, top_k=top_k)
+        try:
+            chunks = _retrieve(ctx, clean_question, top_k=top_k, query_vector=question_vector)
+        except TypeError:
+            chunks = _retrieve(ctx, clean_question, top_k=top_k)
 
     # 6. Retrieval Gate: if no results OR best score < min_retrieval_score, abstain immediately
     best_score = max((c.score for c in chunks), default=0.0)
@@ -302,6 +323,7 @@ def execute_query(
                 "reasons": ["below_min_retrieval_score"] if chunks else ["no_retrieval_results"],
             },
             "sources": [],
+            "scope": scope_data,
             "request_id": ctx.request_id,
             "pii_in_answer": False,
             "injection_attempt": injection_attempt,
@@ -340,6 +362,7 @@ def execute_query(
                 "reasons": [getattr(result, "invalid_reason", "model_output_invalid")],
             },
             "sources": [],
+            "scope": scope_data,
             "request_id": ctx.request_id,
             "pii_in_answer": False,
             "injection_attempt": injection_attempt,
@@ -371,6 +394,7 @@ def execute_query(
                 "reasons": out_check.reasons,
             },
             "sources": [],
+            "scope": scope_data,
             "request_id": ctx.request_id,
             "pii_in_answer": False,
             "injection_attempt": injection_attempt,
@@ -421,6 +445,7 @@ def execute_query(
                     "reasons": ["insufficient_support"],
                 },
                 "sources": [],
+                "scope": scope_data,
                 "request_id": ctx.request_id,
                 "pii_in_answer": False,
                 "injection_attempt": injection_attempt,
@@ -466,13 +491,20 @@ def execute_query(
             "reasons": trust_reasons,
         },
         "sources": sources,
+        "scope": scope_data,
         "request_id": ctx.request_id,
         "pii_in_answer": pii_in_answer,
         "injection_attempt": injection_attempt,
     }
 
-    # 12. Store in semantic cache if eligible (grounded, non-abstained, non-partial)
-    if cache_enabled and question_vector is not None and not abstained and not partial:
+    # 12. Store in semantic cache if eligible (grounded, non-abstained, non-partial, and unscoped)
+    if (
+        not is_scoped
+        and cache_enabled
+        and question_vector is not None
+        and not abstained
+        and not partial
+    ):
         try:
             cache_store(
                 ctx,

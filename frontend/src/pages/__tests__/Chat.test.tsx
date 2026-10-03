@@ -1,26 +1,63 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { ChatPage } from '../ChatPage'
 import * as apiClient from '../../api/client'
 
 vi.mock('../../api/client', () => ({
   query: vi.fn(),
+  listDocuments: vi.fn(),
 }))
+
+const renderChatPage = (initialEntries: any[] = ['/chat']) => {
+  return render(
+    <MemoryRouter initialEntries={initialEntries}>
+      <ChatPage />
+    </MemoryRouter>
+  )
+}
 
 describe('ChatPage Component', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(apiClient.listDocuments).mockResolvedValue([
+      {
+        id: 'doc-ready-1',
+        filename: 'leave_policy.txt',
+        status: 'READY',
+        size_bytes: 1024,
+        chunk_count: 3,
+        created_at: '2026-10-01T00:00:00Z',
+      },
+      {
+        id: 'doc-ready-2',
+        filename: 'handbook.pdf',
+        status: 'READY',
+        size_bytes: 2048,
+        chunk_count: 5,
+        created_at: '2026-10-01T00:00:00Z',
+      },
+      {
+        id: 'doc-proc-3',
+        filename: 'notes.txt',
+        status: 'PROCESSING',
+        size_bytes: 512,
+        chunk_count: 0,
+        created_at: '2026-10-01T00:00:00Z',
+      },
+    ])
   })
 
-  it('renders chat interface with welcome message and input bar', () => {
-    render(<ChatPage />)
+  it('renders chat interface with welcome message, search in selector, and input bar', () => {
+    renderChatPage()
 
     expect(screen.getByText(/Ask any question about your tenant documents/i)).toBeInTheDocument()
+    expect(screen.getByTestId('select-search-in')).toBeInTheDocument()
     expect(screen.getByTestId('input-chat-question')).toBeInTheDocument()
     expect(screen.getByTestId('btn-chat-send')).toBeInTheDocument()
   })
 
-  it('submits question and renders answer along with sources list', async () => {
+  it('submits question and renders answer along with sources list and scope note', async () => {
     vi.mocked(apiClient.query).mockResolvedValueOnce({
       answer: 'Full-time employees receive 20 days paid leave.',
       sources: [
@@ -41,9 +78,13 @@ describe('ChatPage Component', () => {
         partial: false,
         reasons: [],
       },
+      scope: {
+        scoped: false,
+        n_docs: 0,
+      },
     })
 
-    render(<ChatPage />)
+    renderChatPage()
 
     const textarea = screen.getByTestId('input-chat-question')
     const sendButton = screen.getByTestId('btn-chat-send')
@@ -58,6 +99,11 @@ describe('ChatPage Component', () => {
     expect(
       await screen.findByText('Full-time employees receive 20 days paid leave.')
     ).toBeInTheDocument()
+
+    // Scope note displayed in plain text in answer area
+    const scopeNote = screen.getByTestId('message-scope-text')
+    expect(scopeNote).toBeInTheDocument()
+    expect(scopeNote).toHaveTextContent('Answered from: leave_policy.txt')
 
     // Green trust badge displayed for score >= 0.8
     const badge = screen.getByTestId('trust-badge')
@@ -101,7 +147,7 @@ describe('ChatPage Component', () => {
       },
     })
 
-    render(<ChatPage />)
+    renderChatPage()
 
     const textarea = screen.getByTestId('input-chat-question')
     fireEvent.change(textarea, { target: { value: 'Partial question' } })
@@ -133,7 +179,7 @@ describe('ChatPage Component', () => {
       },
     })
 
-    render(<ChatPage />)
+    renderChatPage()
 
     const textarea = screen.getByTestId('input-chat-question')
     fireEvent.change(textarea, { target: { value: 'Out of domain question' } })
@@ -157,7 +203,7 @@ describe('ChatPage Component', () => {
       new Error('Upstream LLM rate limit exceeded')
     )
 
-    render(<ChatPage />)
+    renderChatPage()
 
     const textarea = screen.getByTestId('input-chat-question')
     fireEvent.change(textarea, { target: { value: 'Trigger error question' } })
@@ -165,5 +211,124 @@ describe('ChatPage Component', () => {
 
     const banner = await screen.findByTestId('chat-error-banner')
     expect(banner).toHaveTextContent('Upstream LLM rate limit exceeded')
+  })
+
+  it('supports selecting documents via Search in dropdown and multi-select modal', async () => {
+    renderChatPage()
+
+    // Select "Selected documents"
+    const select = screen.getByTestId('select-search-in')
+    fireEvent.change(select, { target: { value: 'selected' } })
+
+    // Modal opens and fetches documents
+    expect(await screen.findByTestId('doc-scope-modal')).toBeInTheDocument()
+    expect(apiClient.listDocuments).toHaveBeenCalled()
+
+    // READY documents are listed, PROCESSING is omitted
+    expect(screen.getByText('leave_policy.txt')).toBeInTheDocument()
+    expect(screen.getByText('handbook.pdf')).toBeInTheDocument()
+    expect(screen.queryByText('notes.txt')).not.toBeInTheDocument()
+
+    // Select leave_policy.txt
+    const checkbox1 = screen.getByTestId('checkbox-doc-doc-ready-1')
+    fireEvent.click(checkbox1)
+
+    // Filter documents by filename
+    const searchInput = screen.getByTestId('input-doc-search')
+    fireEvent.change(searchInput, { target: { value: 'handbook' } })
+    expect(screen.queryByText('leave_policy.txt')).not.toBeInTheDocument()
+    expect(screen.getByText('handbook.pdf')).toBeInTheDocument()
+
+    // Select handbook.pdf
+    const checkbox2 = screen.getByTestId('checkbox-doc-doc-ready-2')
+    fireEvent.click(checkbox2)
+
+    // Close modal
+    fireEvent.click(screen.getByTestId('btn-modal-done'))
+    expect(screen.queryByTestId('doc-scope-modal')).not.toBeInTheDocument()
+
+    // Scope chip shows count
+    const chip = screen.getByTestId('scope-chip')
+    expect(chip).toBeInTheDocument()
+    expect(chip).toHaveTextContent('Searching 2 documents')
+  })
+
+  it('clears document scope when clear button on chip is clicked', async () => {
+    renderChatPage()
+
+    // Open modal and select a document
+    fireEvent.change(screen.getByTestId('select-search-in'), { target: { value: 'selected' } })
+    expect(await screen.findByTestId('doc-scope-modal')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('checkbox-doc-doc-ready-1'))
+    fireEvent.click(screen.getByTestId('btn-modal-done'))
+
+    // Verify chip appears
+    expect(screen.getByTestId('scope-chip')).toHaveTextContent('Searching 1 document')
+
+    // Click clear button on chip
+    fireEvent.click(screen.getByTestId('btn-clear-scope'))
+
+    // Chip disappears, select reverts to "all"
+    expect(screen.queryByTestId('scope-chip')).not.toBeInTheDocument()
+    const select = screen.getByTestId('select-search-in') as HTMLSelectElement
+    expect(select.value).toBe('all')
+  })
+
+  it('preselects document from navigation state and sends doc_ids on query', async () => {
+    vi.mocked(apiClient.query).mockResolvedValueOnce({
+      answer: 'Scoped answer from document.',
+      sources: [
+        {
+          doc_id: 'doc-pre',
+          filename: 'special_report.pdf',
+          chunk_id: 'chk-1',
+          page: 1,
+          score: 0.95,
+          snippet: 'Specific report content.',
+        },
+      ],
+      request_id: 'req-chat-004',
+      trust: {
+        score: 0.95,
+        grounded: true,
+        abstained: false,
+        partial: false,
+        reasons: [],
+      },
+      scope: {
+        scoped: true,
+        n_docs: 1,
+      },
+    })
+
+    // Render with preselected document in location state
+    renderChatPage([
+      {
+        pathname: '/chat',
+        state: {
+          preselectedDoc: { id: 'doc-pre', filename: 'special_report.pdf' },
+        },
+      },
+    ])
+
+    // Scope chip should immediately appear
+    await waitFor(() => {
+      expect(screen.getByTestId('scope-chip')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('scope-chip')).toHaveTextContent('Searching 1 document')
+
+    // Submit question
+    const textarea = screen.getByTestId('input-chat-question')
+    fireEvent.change(textarea, { target: { value: 'What is in the special report?' } })
+    fireEvent.click(screen.getByTestId('btn-chat-send'))
+
+    // Ensure apiClient.query was called with question, topK (5), and docIds: ['doc-pre']
+    await waitFor(() => {
+      expect(apiClient.query).toHaveBeenCalledWith('What is in the special report?', 5, ['doc-pre'])
+    })
+
+    // Scope note displayed in answer
+    expect(await screen.findByTestId('message-scope-text')).toHaveTextContent('Answered from: special_report.pdf')
   })
 })

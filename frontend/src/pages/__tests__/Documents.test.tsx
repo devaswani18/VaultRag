@@ -3,6 +3,15 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { DocumentsPage } from '../DocumentsPage'
 import * as apiClient from '../../api/client'
 
+const mockNavigate = vi.fn()
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  }
+})
+
 vi.mock('../../api/client', () => ({
   listDocuments: vi.fn(),
   createDocument: vi.fn(),
@@ -107,5 +116,27 @@ describe('DocumentsPage Component', () => {
     expect(vi.mocked(apiClient.listDocuments).mock.calls.length).toBe(callCountBeforeUnmount)
 
     vi.useRealTimers()
+  })
+
+  it('navigates to /chat with preselected document when Ask about this document is clicked', async () => {
+    render(<DocumentsPage />)
+
+    expect(await screen.findByText('policy.txt')).toBeInTheDocument()
+
+    // READY document should have "Ask about this document" button
+    const askBtn = screen.getByTestId('btn-ask-doc-doc-1')
+    expect(askBtn).toBeInTheDocument()
+    expect(askBtn).toHaveTextContent('Ask about this document')
+
+    // PROCESSING document should NOT have the button
+    expect(screen.queryByTestId('btn-ask-doc-doc-2')).not.toBeInTheDocument()
+
+    // Clicking button navigates to /chat with preselectedDoc in state
+    fireEvent.click(askBtn)
+    expect(mockNavigate).toHaveBeenCalledWith('/chat', {
+      state: {
+        preselectedDoc: { id: 'doc-1', filename: 'policy.txt' },
+      },
+    })
   })
 })

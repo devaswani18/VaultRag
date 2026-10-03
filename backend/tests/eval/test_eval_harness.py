@@ -31,7 +31,7 @@ class TestEvalHarness:
         """A normal clean mock benchmark run must pass all 5 hard security gates."""
         summary, results = run_benchmark(mode="mock", seed=42)
 
-        assert len(results) == 40
+        assert len(results) == 43
         assert summary.hard_gates_passed is True
         assert summary.acl_leaks == 0
         assert summary.cross_tenant_leaks == 0

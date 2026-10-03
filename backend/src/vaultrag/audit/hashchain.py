@@ -43,6 +43,8 @@ ALLOWED_DETAIL_KEYS: dict[str, frozenset[str]] = {
             "pii_types_in_question",
             "pii_in_answer",
             "latency_ms",
+            "scoped",
+            "n_scope_docs",
         }
     ),
     "query_abstain": frozenset(
@@ -57,6 +59,8 @@ ALLOWED_DETAIL_KEYS: dict[str, frozenset[str]] = {
             "pii_in_answer",
             "latency_ms",
             "reason",
+            "scoped",
+            "n_scope_docs",
         }
     ),
     "injection_attempt": frozenset({"risk", "reasons"}),
