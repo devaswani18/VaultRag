@@ -82,7 +82,7 @@ jobs:
           bash backend/scripts/package.sh
 
       - name: Configure AWS Credentials (OIDC Apply Role)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN_APPLY }}
           aws-region: ${{ vars.AWS_REGION }}
