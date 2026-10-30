@@ -6,5 +6,5 @@ httpx~=0.28.1
 qdrant-client~=1.19.1
 google-genai~=2.26.0
 pyjwt[crypto]~=2.15.1
-pypdf~=6.19.0
+pypdf~=6.21.3
 python-docx~=1.2.0
